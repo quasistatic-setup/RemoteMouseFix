@@ -1,168 +1,197 @@
 # Log format and how to read it
 
-RemoteMouseFix Phase 1 writes one plain-text, UTF-8, CRLF log per session under
-`logs/` next to the EXE. Files are named `remotemousefix-YYYYMMDD-HHMMSS.log`,
-rotate at `max_log_bytes` and are pruned to `max_log_files`.
+RemoteMouseFix writes one plain-text, UTF-8, CRLF log per session under `logs/` next to
+the EXE. Files are named `remotemousefix-YYYYMMDD-HHMMSS.log`, rotate at `max_log_bytes`
+and are pruned to `max_log_files`. Pruning matches the `remotemousefix-*.log` prefix, so a
+renamed file that still starts with it is pruned too: copy evidence elsewhere.
 
 Every timestamp in the file is **local time**, the same zone as the Windows clock.
-
-There are four kinds of line:
 
 | Prefix | Meaning |
 | --- | --- |
 | `#` | session header, footer, rotation marker |
-| `##` | state transition, heartbeat, operator marker |
+| `##` | state transition, correction change, heartbeat, operator marker |
 | (timestamp) | one low-level mouse event |
-| everything else | nothing; the format has no other line kinds |
 
 ## Session header
 
 ```
-# RemoteMouseFix 0.1.0 - Phase 1 diagnostic log
-# started        : 2026-09-12 18:52:54
+# RemoteMouseFix 0.2.0 - diagnostic log
+# started        : 2026-09-12 20:50:01
 # os             : Windows 10.0 build 26200
 # dpi awareness  : per-monitor-v2
 # elevated       : no
-# config file    : C:\Users\you\RemoteMouseFix\config.json
+# config file    : C:\Users\you\RemoteMouseFix\config-ab-test.json
 # target process : Wow.exe
 # log mouse moves: yes
-# thresholds     : jump>=40px  recenter<=3px  state_poll=10ms
+# diagnostic mode: no
+# correction     : permitted, start=off
+# watchdog       : max_hidden=180000ms max_unechoed=50 max_output_failures=5
+# thresholds     : jump>=40px  anchor<=3px  state_poll=10ms
 # heartbeat      : every 10000 ms (0 = off)
 # rotation       : 8388608 bytes, keep 5 files
 # virtual screen : 1920x1200 at (0,0), monitors=1
 # MOUSECFG      : speed=10 threshold1=6 threshold2=10 acceleration=1
 ```
 
-Why these fields are in every log:
-
 - **dpi awareness** must read `per-monitor-v2` (or `-v1`). The hook reports *physical*
-  screen pixels. A DPI-virtualised process would compare them against scaled window
-  rectangles and every `cli=` / `ctr=` column would be silently wrong. On a 125% display
-  the difference is 25%, which is more than enough to fake or hide a "jump".
-- **elevated** matters because a tool at a lower integrity level than the game can be
-  blocked from querying it. If the process column shows `<access-denied>`, run the game
-  un-elevated or the tool elevated so both sides match.
-- **MOUSECFG** records pointer speed and the "enhance pointer precision" acceleration
-  curve, since both change how a delta becomes cursor motion.
+  pixels and the `absolute` correction computes its targets in the same space. On a 125% display a
+  DPI-virtualised process would be off by 25%.
+- **elevated** matters twice: a lower-integrity tool cannot query the game, and Windows
+  silently discards its synthetic input to a higher-integrity game (UIPI). Run the game
+  and the tool at the same level.
+- **correction** reads `permitted` or `LOCKED OFF (reason)`. It is locked while
+  `diagnostic_mode = true`, and also when the emergency-off hotkey could not be registered.
+- **MOUSECFG** records pointer speed and acceleration. The `relative` correction mode is
+  subject to both; `absolute` is not.
+- `# HOTKEY FAILED` and `# CONFIG WARNING` lines appear when applicable. A failed
+  `Ctrl+Alt+C` is the reason for a locked correction.
 
 ## Event lines
 
 ```
-18:52:59.428      5.201 #000000001 MOVE  scr=(+00388,+00451) d=(+0000,+0000) dt= 218ms cli=(+00340,+00411) ctr=(+00000,+00000) flg=I- xi=0x0000000000000000 RECENTER pid=21792 Wow.exe
+20:50:04.118      3.117 #000000042 MOVE  scr=(+00948,+00672) d=(+0005,+0000) dt=  16ms cli=(+00700,+00500) ctr=(+00200,+00150) anc=(+00320,+00170) flg=I- cur=H xi=0x0000000000000000 DROP rd=(+5,+0) via=absolute pid=4242   Wow.exe
+20:50:04.118      3.117 #--------- APPLY via=absolute rd=(+5,+0) before=(628,482) target=(633,482) after=(628,482) ok qpc_ms=81234567
+20:50:04.119      3.118 #000000043 MOVE  scr=(+00633,+00482) d=(-0315,-0190) dt=   0ms cli=(+00385,+00330) ctr=(-00115,-00020) anc=(+00005,+00000) flg=I- cur=H xi=0x00000000524d4658 OWN pid=4242   Wow.exe
 ```
 
 | Column | Source | Meaning |
 | --- | --- | --- |
-| `18:52:59.428` | QPC offset applied to the session start | wall clock, millisecond resolution |
-| `5.201` | `QueryPerformanceCounter` | seconds since session start; use this for deltas, it is the precise clock |
-| `#000000001` | internal counter | sequence number. A gap means events were dropped, which the footer also reports |
+| `20:50:04.118` | QPC offset applied to the session start | wall clock, millisecond resolution |
+| `3.117` | `QueryPerformanceCounter` | seconds since session start; the precise clock |
+| `#000000042` | internal counter | sequence number. A gap means dropped events |
 | `MOVE` | hook message | `MOVE`, `LDOWN`, `LUP`, `RDOWN`, `RUP`, `MDOWN`, `MUP`, `XDOWN`, `XUP`, `WHEEL`, `HWHEL` |
-| `scr=(x,y)` | `MSLLHOOKSTRUCT.pt` | absolute position in physical screen pixels |
+| `scr=(x,y)` | `MSLLHOOKSTRUCT.pt` | absolute position in physical screen pixels. For a `DROP` line this is where the remote client wanted the pointer; it never got there |
 | `d=(dx,dy)` | derived | delta to the previous logged event's position |
-| `dt=` | `MSLLHOOKSTRUCT.time` | milliseconds since the previous event, from the message tick count. `-` on the first event |
-| `cli=(x,y)` | derived | position inside the target window's client area |
-| `ctr=(dx,dy)` | derived | offset from the client-area centre. `(+00000,+00000)` means exactly centred |
-| `flg=` | `MSLLHOOKSTRUCT.flags` | `I` = `LLMHF_INJECTED`, `L` = `LLMHF_LOWER_IL_INJECTED`, `-` = not set. `--` is a physical event |
-| `xi=` | `MSLLHOOKSTRUCT.dwExtraInfo` | the 64-bit tag the injector may set. Non-zero values identify the injecting software |
-| `wheel=` | `mouseData` high word | wheel notches, only on `WHEEL` / `HWHEL` |
-| `xbtn=` | `mouseData` high word | which extra button, only on `XDOWN` / `XUP` |
-| `RECENTER` | heuristic | an **injected move** landing within `recenter_tolerance_px` of the client centre |
+| `dt=` | `MSLLHOOKSTRUCT.time` | milliseconds since the previous event. `-` on the first event |
+| `cli=(x,y)` | derived | position inside the target client area |
+| `ctr=(dx,dy)` | derived | offset from the client-area centre |
+| `anc=(dx,dy)` | derived | offset from the **learned warp anchor**, only while the cursor is hidden and an anchor is known. This is the quantity the game reads as camera movement |
+| `flg=` | `MSLLHOOKSTRUCT.flags` | `I` = `LLMHF_INJECTED`, `L` = `LLMHF_LOWER_IL_INJECTED`. `--` is physical input |
+| `cur=` | `GetCursorInfo` in the hook | `H` = cursor hidden, the game holds the mouse. `-` = shown |
+| `xi=` | `dwExtraInfo` | the injector's tag. `0x00000000524d4658` is this tool's own signature |
+| `wheel=` / `xbtn=` | `mouseData` | wheel notches, or which extra button |
+| `DROP rd=(dx,dy) via=mode` | correction | the event was **withheld** from the game; the remote pointer moved by `rd` and that delta was handed on via `mode`. A trailing `reset` means no reference position existed yet, so nothing was moved |
+| `OWN` | `xi` signature | synthetic input produced by this tool. In `absolute` mode its `scr=` must equal the preceding `APPLY target=`; its `anc=` is what the game will read |
+| `ANCHOR` | heuristic | a real, not withheld, move within `anchor_tolerance_px` of the anchor while hidden: the game's warp held |
 | `JUMP` | heuristic | `\|dx\|` or `\|dy\|` reached `jump_threshold_px` |
-| `pid=` / name | resolved from the foreground window | always the target process; the tool logs nothing else |
+| `pid=` / name | foreground window | always the target process |
 
-`RECENTER` is only ever applied to movement. A click that happens to land on the centre
-is not a recenter, and tagging it would bury the real signal.
-
-Both tags are **heuristics, deliberately named as guesses**. They are grep handles, not
-conclusions. `flg`, `xi`, `d`, `dt` and `ctr` are the raw evidence.
+`ANCHOR` and `JUMP` are grep handles, not conclusions. Versions up to 0.1.0 had a
+`RECENTER` tag that assumed the client centre as warp target; the measurement of
+2026-09-12 showed that assumption to be wrong, so it was replaced by the learned anchor.
 
 ## State lines
 
 ```
-## STATE fg=0x00000000000605a2 pid=21792 Wow.exe | client=(48,40)-(728,862) 680x822 | cursor_at=(388,451)
-## STATE cursor=HIDDEN | cursor_at=(388,451)
+## STATE fg=0x00000000000605a2 pid=6180 Wow.exe | client=(320,75)-(1600,1099) 1280x1024 | dpi=120 | cursor_at=(968,58)
+## STATE cursor=HIDDEN | cursor_at=(803,554)
+## STATE cursor=SHOWN | cursor_at=(627,813)
 ## STATE clip=CONFINED (387,450)-(390,453) 3x3 | cursor_at=(388,451)
-## STATE clip=RELEASED | cursor_at=(388,451)
+## STATE anchor-learned=(803,554) client_offset=(483,479) hits=37/80
 ## STATE focus-left-target -> pid=3424 explorer.exe
 ```
 
-A separate thread samples this every `state_poll_interval_ms` (default 10 ms) and writes
-a line only when something changed. **None of it produces hook events**, which is why it
-is polled rather than captured:
+Sampled every `state_poll_interval_ms`; written only on change. None of it produces hook
+events, which is why it is polled:
 
-- `cursor=HIDDEN` — the game hid the pointer. WoW does this while it holds the mouse for
-  camera control, so it brackets the camera-drag phase.
-- `clip=CONFINED` — `ClipCursor` is active. A small rectangle around the window centre is
-  the direct fingerprint of a capture-and-recenter loop. This is the strongest single
-  piece of evidence for or against the recenter theory.
-- `client=` — the client rectangle in screen coordinates. The anchor for `cli=` and `ctr=`.
-- `focus-left-target` — something else took the foreground. This is logged even though
-  the other process is not the target, because "the remote client's own window stole
-  focus mid-drag" is a prime suspect. Only the handle, PID and process name are recorded;
-  no input from any other application ever reaches the file.
+- `cursor=HIDDEN` / `SHOWN` bracket the phase in which the game holds the mouse. The
+  game's cursor warp itself uses `SetCursorPos` and is **invisible** in the event stream;
+  it shows up only as `cursor_at` here.
+- `anchor-learned` is written when a hidden phase ends and one cursor position clearly
+  dominated its samples (at least 5 hits and 20%). The anchor is stored as a client offset,
+  so it follows the window when it moves.
+- `clip=CONFINED` means `ClipCursor` is active. WoW 3.3.5a does not use it.
+- `focus-left-target` names the new foreground process. No input from it is recorded.
 
-## Heartbeat, marker and capture lines
+## Apply lines
 
 ```
-## HEARTBEAT target_foreground=no fg_pid=3424 events=5 injected=5 recenter=2 jump=2 dropped=0 cursor=shown clip=released
-## MARKER #1 at cursor=(388,451) cursor_visible=yes clip=released
-## CAPTURE PAUSED by operator
+20:50:04.118      3.117 #--------- APPLY via=absolute rd=(+5,+0) before=(628,482) target=(633,482) after=(628,482) ok qpc_ms=81234567
 ```
 
-The heartbeat exists so that an empty event section is unambiguous. `target_foreground=no`
-throughout a session means the target name never matched or the window never came to the
-front, which is a very different problem from "no events occurred".
+One line per correction output, written by the message loop right after the `SendInput`
+call. `before` and `after` are cursor positions read around the call; `after` usually still
+equals `before`, because the input thread processes the event slightly later. `target` is
+the intended landing position in `absolute` mode. `FAILED error=N` replaces `ok` when the
+call failed. `qpc_ms` is the machine-wide QueryPerformanceCounter in milliseconds, so the
+line can be aligned exactly with another process's trace, such as `MouseLookProbe`.
 
-`## MARKER` is written by Ctrl+Alt+M. Use it immediately before the action you want to
-study, so the interesting moment can be found without reading the whole file.
+## Correction lines
+
+```
+## CORRECTION mode=absolute previous=off source=hotkey
+## CORRECTION mode=off previous=absolute source=hotkey
+## CORRECTION refused mode=relative: diagnostic_mode = true
+## CORRECTION config correction_mode=relative ignored: diagnostic_mode = true
+## CORRECTION DISABLED by watchdog: cursor hidden continuously for more than 180000 ms (was relative)
+```
+
+`source` is `config` (startup mode) or `hotkey`. Every watchdog trip names its reason:
+
+| Reason | Meaning |
+| --- | --- |
+| cursor hidden continuously | the hidden phase outlasted `watchdog_max_hidden_ms`; either a very long hold or a game state that hides the cursor for other reasons |
+| consecutive `SendInput` failures | the output call itself failed `watchdog_max_output_failures` times in a row |
+| own moves never reached the hook | more than `watchdog_max_unechoed` signed events are outstanding: synthetic input is discarded silently, typically because the game runs elevated |
+
+## Heartbeat and marker lines
+
+```
+## HEARTBEAT target_foreground=yes fg_pid=6180 correction=absolute events=1452 injected=1430 suppressed=640 applied=598 own=598 anchor=0 jump=3 output_failures=0 watchdog=0 dropped=0 cursor=shown clip=released
+## MARKER #1 at cursor=(388,451) cursor_visible=yes clip=released correction=absolute
+## CAPTURE PAUSED by operator (correction unaffected)
+```
+
+The heartbeat makes an empty event section unambiguous: `target_foreground=no` throughout
+means the target never matched. `correction=locked` means no mode could be enabled.
+
+`## MARKER` is written by `Ctrl+Alt+M`; it records the correction mode, so a marker before
+each test step documents which mode that step ran in. `Ctrl+Alt+P` pauses **logging only**.
 
 ## Session footer
 
 ```
-# events logged  : 43
-# injected       : 43
-# recenter tagged: 10
-# jump tagged    : 15
-# hook events seen: 43 (fast-path skipped 0, queue drops 0)
-# log rotations  : 0
+# events logged   : 812
+# injected        : 790
+# at anchor       : 0
+# jump tagged     : 3
+# suppressed      : 640
+# applied         : 598
+# own seen        : 598
+# output failures : 0
+# watchdog trips  : 0
+# hook events seen: 2004 (outside target 1192, queue drops 0)
+# log rotations   : 0
 ```
 
-`hook events seen` counts every event the callback saw, including those outside the
-target window. `fast-path skipped` is that difference. **`queue drops` must be 0**; a
-non-zero value means the writer could not keep up and the trace has holes.
+**`queue drops` must be 0**; otherwise the trace has holes. `suppressed` greater than
+`applied` is normal: a withheld event whose remote position did not change hands on no
+delta. `own seen` should track `applied` closely in both correction modes.
 
 ## Reading a click into the 3D view
 
-The question Phase 1 exists to answer. Filter the log around your marker and check, in
-order:
+1. **Is the incoming stream injected?** `flg=I-` on the remote moves means absolute
+   positioning via `SendInput`.
+2. **Does `xi` carry a signature?** TeamViewer sets none (`0x0`).
+3. **Is there a hidden phase?** Look for `cursor=HIDDEN` after the `LDOWN` and for an
+   `anchor-learned` line when it ends.
+4. **Does the warp hold?** With correction off over a remote client, `anc=` on the moves
+   during the hidden phase is large and nothing is tagged `ANCHOR`: the remote position
+   overwrites the warp. Locally, or with a working correction, the game-side offsets stay
+   small.
+5. **What is the timing?** Use the seconds column and `dt=`. Pauses of about 500 ms followed
+   by a large `d=` are a property of the remote transport, not of the game.
 
-1. **Is the incoming stream injected?** Look at `flg` on the moves arriving from the
-   remote session. `I` means the remote client synthesises input via `SendInput`, so the
-   game receives absolute positions rather than raw device deltas. `--` means the events
-   arrive as physical device input and the theory needs revisiting.
-2. **Does `xi` carry a signature?** A constant non-zero `dwExtraInfo` identifies the
-   injector and would let a later phase recognise remote events specifically.
-3. **What happens on `LDOWN` into the viewport?** Read the `d=` column on the next few
-   moves. A large `d` within a few milliseconds of the click is the jump, in numbers.
-4. **Is there a recenter?** Look for `RECENTER` moves and for `clip=CONFINED` /
-   `cursor=HIDDEN` state lines around the click. Their presence and their timing
-   relative to the click tell you whether the game warps the pointer, and whether the
-   remote client then fights that warp by re-asserting an absolute position.
-5. **What is the timing?** Use the `5.201`-style seconds column and `dt=`. A recenter
-   followed within a frame or two by an absolute position from the remote client is the
-   collision the theory predicts.
+## Reading a correction run
 
-## What this build does not do
-
-By design, so that the log is trustworthy evidence:
-
-- no DLL injection, no driver, no code in the game process
-- no `SendInput`, `mouse_event`, `SetCursorPos` or `ClipCursor`: it never writes input,
-  so it cannot be the cause of anything it records
-- no filtering, correction or suppression; the hook always calls `CallNextHookEx`
-- no keyboard hook, so keystrokes and text content cannot be recorded. The three hotkeys
-  use `RegisterHotKey`, which can only ever observe those three combinations
-- no network access
-- no admin rights, no installer, no change to the game
-
-The tool has no effect once it exits.
+- During a hidden phase every remote move should be a `DROP` line. A remote move with
+  `cur=H` that is **not** a `DROP` means the correction was off at that moment.
+- `rd=` is what the game should receive per event. The sum of `rd` across a phase is the
+  intended camera movement.
+- A `DROP ... reset` at the start of a phase is expected once after a mode change or a
+  focus change and moves nothing.
+- Every applied delta produces an `APPLY` line followed by an `OWN` move. In `absolute`
+  mode the `OWN` position must equal `target`. In `relative` mode the `OWN` move's offset
+  from the anchor (`anc=`) shows what pointer speed and acceleration made of `rd`;
+  comparing the two measures the acceleration distortion directly.

@@ -1,89 +1,109 @@
 # RemoteMouseFix
 
-A portable Windows diagnostic tool for broken mouse and camera behaviour in 3D games
-driven over remote desktop software. The first target case is **TeamViewer + World of
-Warcraft 3.3.5a**.
+A portable Windows tool against broken mouse and camera behaviour in 3D games driven over
+remote desktop software. The first target case is **TeamViewer + World of Warcraft
+3.3.5a**.
 
-**This is Phase 1: it observes and records. It does not correct anything.**
+It records the low-level mouse stream as evidence, and it can optionally correct the
+specific conflict that the evidence showed. The correction is off unless explicitly
+enabled.
 
-## The problem being investigated
+## The problem
 
-Over TeamViewer, ordinary UI clicks and keyboard input in WoW work correctly. A single
-click into the 3D view can already make the camera jump hard, and dragging to turn the
-camera afterwards produces further large, unwanted jumps.
+Over TeamViewer, ordinary UI clicks and keyboard input in WoW work. A single click into the
+3D view already makes the camera jump hard, and turning the camera produces further large
+jumps.
 
-Working theory: a conflict between the absolute pointer position delivered by the remote
-client and WoW's own relative mouse handling, including its cursor capture and recenter
-logic.
+The measurement of 2026-09-12 ([docs/findings-2026-09-12.md](docs/findings-2026-09-12.md))
+established the mechanism:
 
-That is a theory, not a diagnosis. Phase 1 produces the evidence to confirm or kill it,
-which is why this build deliberately contains no correction logic: a tool that rewrote
-input could not be trusted as a witness.
+1. While the camera is controlled with the mouse, WoW hides the cursor and keeps warping it
+   back to a fixed anchor point. It reads the distance from that anchor as camera movement.
+2. TeamViewer delivers every pointer update as an injected **absolute** position. That
+   overwrites the warp: the cursor sits 140 to 410 px away from the anchor instead of 1 to
+   3 px, and WoW turns the camera by that whole distance.
+3. The remote stream is also coarser, with pauses of about 500 ms followed by a large
+   catch-up.
 
-## What it records
+## How the correction works
 
-A single `WH_MOUSE_LL` low-level mouse hook, active only while the configured target
-process owns the foreground window:
+Only while a correction mode is on, the target window is in front and its cursor is hidden:
 
-- timestamp (millisecond wall clock plus a high-resolution offset)
-- event type: moves, left/right/middle/X button down and up, wheel and horizontal wheel
-- absolute cursor position in physical screen pixels
-- delta to the previous position, and the time gap in milliseconds
-- position in the target window's client area, and the offset from the client centre
-- `dwExtraInfo`
-- `LLMHF_INJECTED` and `LLMHF_LOWER_IL_INJECTED`
-- the foreground window and its process
+1. Every injected mouse move from another program is **withheld** from the game, so the
+   game's warp stays intact.
+2. The tool computes how far the **remote pointer itself** moved since its previous update.
+3. It hands exactly that movement to the game as a signed `SendInput` event.
 
-Plus, on a separate 10 ms sampler, the state that produces no hook events at all and
-that a cursor recenter would show up in: cursor visibility, `ClipCursor` confinement,
-client geometry, DPI and foreground transitions.
+A click without mouse movement therefore reaches the game as zero movement, and a drag
+reaches it as the real deltas. UI clicks are untouched, because the cursor is not hidden
+then. Buttons, wheel and physical input are never withheld.
 
-See [docs/diagnostics.md](docs/diagnostics.md) for the exact log format and a procedure
-for reading a click into the 3D view.
+### Modes
 
-## Constraints this build honours
+| Mode | Hotkey | Output | Trade-off |
+| --- | --- | --- | --- |
+| `off` | `Ctrl+Alt+C` | none | observe only |
+| `absolute` | `Ctrl+Alt+1` | absolute `SendInput` to cursor + delta | exact pixels, no pointer acceleration. Suits games that read the cursor position, like WoW 3.3.5a |
+| `relative` | `Ctrl+Alt+2` | relative `SendInput` | also suits games that read Raw Input, but pointer speed and acceleration distort it, most strongly on large catch-up deltas |
+
+A third variant based on `SetCursorPos` was built and measured against the test probe and
+dropped: it lost about 40% of the movement, because `SetCursorPos` races with the input
+thread that is still finishing the withheld event. `SendInput` is queued behind it and
+processed in order.
+
+The 500 ms pauses of the remote transport are not corrected. A large catch-up delta is real
+movement that arrived late; the tool passes it on unchanged.
+
+### Safety
+
+- The shipped `config.json` has `diagnostic_mode = true`: input is never modified and no
+  mode can be enabled.
+- Correction needs `diagnostic_mode = false` (see `config-ab-test.json`) and still starts
+  in `correction_mode`, which defaults to `off`.
+- `Ctrl+Alt+C` switches the correction off instantly. If that hotkey cannot be registered,
+  correction stays locked, because the operator may be steering the machine through the
+  remote client and must never lose the pointer.
+- Releasing the mouse button, or any focus change, ends the intervention at once.
+- Watchdogs switch the correction off and log the reason when the cursor stays hidden for
+  too long, when output calls fail repeatedly, or when the tool's own signed events stop
+  reaching the hook (typically a game running elevated).
+
+## Constraints
 
 - C++17, Win32 API, CMake, Windows 10/11, x64
-- no DLL injection, no driver, no kernel component
-- no admin rights, no installer, no registry writes
-- no network access of any kind
-- no change to the game or its files
-- no `SendInput`, `mouse_event`, `SetCursorPos` or `ClipCursor`: input is never written
-- no keyboard hook, so keystrokes and text content cannot be recorded
-- no filtering or correction; every event is passed on untouched
-- effective only while it runs, and no residue once it exits
+- no DLL injection, no driver, no kernel component, no code in the game process
+- no admin rights, no installer, no registry writes, no network access
+- no change to the game or its files, no `ClipCursor`
+- no keyboard hook: hotkeys use `RegisterHotKey` and can only observe their own combinations
+- effective only while it runs, no residue once it exits
 
 ## Requirements
 
 - Windows 10 or 11, x64
-- The tool and the game should run at the same integrity level. If the log shows
-  `<access-denied>` in the process column, either run the game un-elevated or run the
-  tool elevated so the two match.
+- The tool and the game must run at the same integrity level. Windows silently discards
+  synthetic input to a more privileged window. If the log shows `<access-denied>` in the
+  process column, run both un-elevated.
 
-The EXE is statically linked and depends only on OS libraries, so it needs no runtime
-redistributable.
+Both EXEs are statically linked and depend only on OS libraries.
 
 ## Build
 
 ### MSVC (preferred)
 
-Needs Visual Studio 2019 or newer with the "Desktop development with C++" workload, or
-the standalone Build Tools, plus CMake 3.20+.
+Visual Studio 2019 or newer with "Desktop development with C++", or the Build Tools, plus
+CMake 3.20+.
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
-Result: `build\bin\Release\RemoteMouseFix.exe`, with `config.json` copied next to it.
-
-Visual Studio can also open the folder directly: it reads `CMakeLists.txt` and offers an
-`x64-Release` configuration.
+Result in `build\bin\Release\`: `RemoteMouseFix.exe`, `MouseLookProbe.exe`, `config.json`
+and `config-ab-test.json`.
 
 ### Cross-compile from WSL or Linux (MinGW-w64)
 
-Produces a genuine native Windows x64 PE executable, not a Linux binary. Useful when no
-MSVC installation is available.
+Produces genuine native Windows x64 PE executables.
 
 ```bash
 sudo apt install g++-mingw-w64-x86-64 cmake
@@ -91,28 +111,24 @@ cmake -S . -B build-mingw -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw-w64-x64.c
 cmake --build build-mingw -j
 ```
 
-Result: `build-mingw/bin/RemoteMouseFix.exe`.
-
-If the toolchain is not installed system-wide, point the toolchain file at it:
-
-```bash
-cmake -S . -B build-mingw \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw-w64-x64.cmake \
-  -DRMF_MINGW_PREFIX=$HOME/.local/opt/mingw-w64/usr
-```
-
-`CMakeLists.txt` refuses to configure for a non-Windows target, so a Linux compiler
-cannot be used by accident.
+For a toolchain that is not installed system-wide add
+`-DRMF_MINGW_PREFIX=$HOME/.local/opt/mingw-w64/usr`. `-DRMF_BUILD_PROBE=OFF` skips the test
+probe. `CMakeLists.txt` refuses a non-Windows target, so a Linux compiler cannot be used by
+accident.
 
 ## Configuration
 
-`config.json` is read from the EXE's directory, or from a path given as the first
-argument. Keys beginning with `_` are comments.
+`config.json` is read from the EXE's directory, or from a path given as first argument. Keys
+beginning with `_` are comments.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `target_process` | `Wow.exe` | executable to observe, matched case-insensitively on the file name |
-| `diagnostic_mode` | `true` | must stay `true`; this build has no correction path and refuses to start otherwise |
+| `target_process` | `Wow.exe` | executable to observe, matched case-insensitively |
+| `diagnostic_mode` | `true` | `true`: never modify input. `false`: correction modes available |
+| `correction_mode` | `off` | mode at startup: `off`, `absolute` or `relative` |
+| `watchdog_max_hidden_ms` | `180000` | hidden cursor longer than this switches correction off; `0` disables this check |
+| `watchdog_max_unechoed` | `50` | own events allowed outstanding before the echo watchdog trips |
+| `watchdog_max_output_failures` | `5` | consecutive failed `SendInput` calls before the watchdog trips |
 | `log_mouse_moves` | `true` | `false` records buttons, wheel and state only |
 | `log_directory` | `logs` | relative paths resolve next to the EXE |
 | `log_file_prefix` | `remotemousefix` | log file name prefix |
@@ -120,8 +136,8 @@ argument. Keys beginning with `_` are comments.
 | `max_log_files` | `5` | keep at most this many files |
 | `flush_on_button` | `true` | flush after every button event |
 | `jump_threshold_px` | `40` | tag a move as `JUMP` at or above this delta |
-| `recenter_tolerance_px` | `3` | an injected move this close to the client centre is tagged `RECENTER` |
-| `state_poll_interval_ms` | `10` | cursor visibility and `ClipCursor` sampling period |
+| `anchor_tolerance_px` | `3` | a real move this close to the learned anchor is tagged `ANCHOR` |
+| `state_poll_interval_ms` | `10` | sampling period for cursor state and anchor learning |
 | `log_state_changes` | `true` | write state transition lines |
 | `console_status_interval_ms` | `2000` | live console counters; `0` disables |
 | `heartbeat_interval_ms` | `10000` | periodic liveness line in the log; `0` disables |
@@ -132,93 +148,116 @@ argument. Keys beginning with `_` are comments.
 RemoteMouseFix.exe [path\to\config.json] [--seconds N]
 ```
 
-`--seconds N` stops automatically after N seconds, which is the easiest way to take a
-bounded capture. `--help` prints the usage.
-
-Hotkeys while running:
-
 | Hotkey | Effect |
 | --- | --- |
-| `Ctrl+Alt+M` | write a `## MARKER` line into the log |
-| `Ctrl+Alt+P` | pause / resume capture |
+| `Ctrl+Alt+M` | write a `## MARKER` line, including the current correction mode |
+| `Ctrl+Alt+P` | pause / resume logging (the correction keeps running) |
 | `Ctrl+Alt+Q` | quit cleanly (`Ctrl+C` and closing the window also work) |
+| `Ctrl+Alt+C` | correction off |
+| `Ctrl+Alt+1` | correction `absolute` |
+| `Ctrl+Alt+2` | correction `relative` |
 
-These use `RegisterHotKey`, not a keyboard hook, so the tool can only ever observe those
-three combinations.
+Log files rotate and are pruned by prefix, so copy a log you want to keep out of `logs\`
+before taking further captures.
 
-## Test procedure: TeamViewer + WoW 3.3.5a
+## Test procedure: correction A/B over TeamViewer
 
 Do this from the remote side, over TeamViewer, exactly as when the problem occurs.
 
-1. Copy `RemoteMouseFix.exe` and `config.json` into the same folder on the **game**
-   machine. Confirm `target_process` matches the real executable name (`Wow.exe`).
-2. Start WoW and log in to a character standing still in a quiet spot.
-3. Start `RemoteMouseFix.exe`. The console shows `idle` until WoW is in front.
-4. Click into the WoW window. The console status must switch to `ACTIVE`.
-5. Run this sequence, slowly and deliberately, leaving about two seconds between steps:
-   - press `Ctrl+Alt+M`, then click once on a **UI element** (an action bar button).
-     This is the known-good case and gives the baseline.
-   - press `Ctrl+Alt+M`, then click once into the **3D view** and do not move the mouse.
-     This is the reported failure.
-   - press `Ctrl+Alt+M`, then hold the **right** mouse button and turn the camera slowly
-     left and right for a few seconds.
-   - press `Ctrl+Alt+M`, then hold the **left** mouse button and drag slowly.
-6. Press `Ctrl+Alt+Q`. The footer must report `queue drops 0`.
-7. For comparison, if it is possible at all, repeat steps 4 to 6 **locally at the machine**
-   with a physical mouse. A local log turns every finding into a difference rather than
-   an absolute, which is far more conclusive.
+1. Put `RemoteMouseFix.exe` and `config-ab-test.json` into one folder on the game machine.
+2. Start WoW and park a character in a quiet spot.
+3. Start `RemoteMouseFix.exe config-ab-test.json`. The console must show
+   `correction: permitted`. Click into WoW; the status must switch to `ACTIVE` with
+   `corr=off`.
+4. Run the same three steps once per mode, in the order `off`, `absolute`, `relative`.
+   Switch with the hotkey first (`Ctrl+Alt+C`, `Ctrl+Alt+1`, `Ctrl+Alt+2`); the console
+   confirms each switch.
+   - `Ctrl+Alt+M`, then one click into the **3D view** without moving the mouse.
+   - `Ctrl+Alt+M`, then hold the **right** button and turn the camera slowly left and right.
+   - `Ctrl+Alt+M`, then hold the **left** button and drag slowly.
+   Note for each mode whether it feels smooth, jumps, or turns too fast or too slow.
+5. `Ctrl+Alt+C`, then `Ctrl+Alt+Q`. The footer must report `queue drops 0` and
+   `watchdog trips 0`.
+6. Copy the log out of `logs\` and hand it back together with your notes per mode.
 
-Hand back the file from `logs\` (both files if a local comparison run was taken).
+`Ctrl+Alt+C` works at any time. With absolute remote input a single drag can only turn as
+far as the remote pointer can travel on the controlling screen; release and grab again to
+continue turning.
+
+## Test procedure: diagnostic capture only
+
+With the shipped `config.json`, `RemoteMouseFix.exe` records without changing anything. Use
+`Ctrl+Alt+M` before each action, then compare a remote run with a local run on the same
+machine. [docs/diagnostics.md](docs/diagnostics.md) explains every column and how to read a
+click into the 3D view.
+
+## Testing without the game: MouseLookProbe
+
+`MouseLookProbe.exe` is a small window that reproduces the measured mouse-look mechanism:
+it hides the cursor on a button press, warps it to a fixed off-centre anchor, reads the
+distance on a timer and warps back. It writes each phase's summed movement to
+`mouselook-probe.log`, which makes a correction's effect measurable without WoW.
+
+[tools/probe/emulate-remote.ps1](tools/probe/emulate-remote.ps1) automates this: it starts
+both programs, drives the probe with absolute injected input shaped like the measured
+TeamViewer stream, and runs a click without motion, a steady drag and a stalled drag. Its
+header describes the setup. A click without movement must sum to zero in the probe log, and
+a drag of known length must sum to that length.
+
+The probe reads the cursor position, as WoW does. A game reading Raw Input behaves
+differently, so a pass against the probe proves the correction logic, not compatibility
+with any particular game.
 
 ## Layout
 
 ```
 RemoteMouseFix/
-  CMakeLists.txt
-  README.md
-  LICENSE
+  CMakeLists.txt  README.md  LICENSE  AGENTS.md
   cmake/
     Version.h.in                     generated version header template
     toolchain-mingw-w64-x64.cmake    cross-compile toolchain
   config/
-    config.json
+    config.json                      observe only (diagnostic_mode = true)
+    config-ab-test.json              correction permitted, starts off
   docs/
-    diagnostics.md                   log format and reading procedure
-  include/rmf/
-    Config.h  EventQueue.h  EventRecord.h  Logger.h
-    MouseHook.h  ProcessInfo.h  StateSampler.h  WinCompat.h
+    diagnostics.md                   log format and reading procedures
+    findings-2026-09-12.md           dated measurement report
+    doc-manifest.json
+  include/rmf/                       headers
   src/
-    main.cpp         startup, message loop, hotkeys, writer thread
-    Config.cpp       dependency-free flat JSON reader
-    EventRecord.cpp  log line formatting
-    Logger.cpp       size-rotating text log
-    MouseHook.cpp    the WH_MOUSE_LL hook
-    ProcessInfo.cpp  PID to process name, with PID-reuse detection
-    StateSampler.cpp cursor visibility, ClipCursor, geometry polling
-    WinCompat.cpp    DPI awareness and version-dependent APIs
+    main.cpp          startup, message loop, hotkeys, correction output, writer thread
+    Correction.cpp    correction modes, SendInput output, anchor learning
+    MouseHook.cpp     the WH_MOUSE_LL hook and the withhold decision
+    Config.cpp        dependency-free flat JSON reader
+    EventRecord.cpp   log line formatting
+    Logger.cpp        size-rotating text log
+    ProcessInfo.cpp   PID to process name, with PID-reuse detection
+    StateSampler.cpp  cursor visibility, ClipCursor, geometry polling
+    WinCompat.cpp     DPI awareness and version-dependent APIs
+  tools/probe/
+    MouseLookProbe.cpp               stand-in game for testing the correction
+    emulate-remote.ps1               remote-client emulator and test scenarios
 ```
 
 ## Design notes
 
-**The hook callback does almost nothing.** A `WH_MOUSE_LL` callback that blocks is
-silently removed by Windows after `LowLevelHooksTimeout`. The callback therefore only
-captures cheap data into a lock-free single-producer ring buffer. A writer thread does
-the process lookups, the delta arithmetic and all file I/O, so disk access can never
-delay an input event.
+**The hook callback stays minimal.** A `WH_MOUSE_LL` callback that blocks is silently
+removed by Windows. The callback captures cheap data into a lock-free single-producer ring,
+decides whether to withhold, and posts the replacement movement to the message loop. File
+I/O happens on a writer thread; `SendInput` happens after the callback has returned.
 
-**Scoping is done by the state sampler, not by the hook.** The sampler publishes the
-target PID in a single atomic, and only while the target owns the foreground window. The
-hook's first action is to read that atomic, so input outside the target window is
-discarded before it is ever copied anywhere.
+**The event ring lives on the heap.** It holds 16,384 events and is several megabytes large,
+more than a default main-thread stack.
 
-**DPI awareness is a correctness requirement, not a nicety.** The hook reports physical
-pixels. Without per-monitor awareness the window rectangles would be scaled differently
-and the `cli=` and `ctr=` columns would be quietly wrong by the display's scale factor.
+**Scoping is done by the state sampler.** It publishes the target PID in an atomic only while
+the target owns the foreground, so input outside the target never enters the tool's memory.
 
-## Phase 2
+**The warp anchor is learned, not assumed.** The client centre is not WoW's anchor. The
+anchor is taken from cursor positions sampled while the cursor is hidden and stored as a
+client offset.
 
-Out of scope here, and it should not start before a log exists. The order matters: decide
-what the data shows, then decide what to do about it.
+**DPI awareness is a correctness requirement.** The hook reports physical pixels and absolute
+targets are computed in the same space.
 
 ## License
 

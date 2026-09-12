@@ -1,0 +1,17 @@
+{
+  "documents": [
+    "AGENTS.md",
+    "README.md",
+    "docs/diagnostics.md"
+  ],
+  "document_roots": [
+    "docs"
+  ],
+  "generated": [],
+  "canonical": [
+    "docs/diagnostics.md"
+  ],
+  "budgets": {
+    "AGENTS.md": 12000
+  }
+}

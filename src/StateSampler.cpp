@@ -44,7 +44,7 @@ bool StateSampler::Snapshot::DiffersFrom(const Snapshot& other) const {
            dpi              != other.dpi;
 }
 
-void StateSampler::Start(unsigned intervalMs, ChangeHandler onChange) {
+void StateSampler::Start(unsigned intervalMs, ChangeHandler onChange, SampleHandler onSample) {
     if (running_.load()) {
         return;
     }
@@ -53,6 +53,7 @@ void StateSampler::Start(unsigned intervalMs, ChangeHandler onChange) {
         lockInit_ = true;
     }
     onChange_ = std::move(onChange);
+    onSample_ = std::move(onSample);
     running_.store(true);
     thread_ = std::thread(&StateSampler::Run, this, intervalMs == 0 ? 10u : intervalMs);
 }
@@ -137,6 +138,9 @@ void StateSampler::Run(unsigned intervalMs) {
 
         if (onChange_ && (!havePrevious || now.DiffersFrom(previous))) {
             onChange_(havePrevious ? previous : now, now);
+        }
+        if (onSample_) {
+            onSample_(now);
         }
         previous     = now;
         havePrevious = true;

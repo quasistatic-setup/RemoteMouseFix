@@ -37,7 +37,11 @@ public:
     // way worth logging. It must be safe to call concurrently with the writer thread.
     using ChangeHandler = std::function<void(const Snapshot& prev, const Snapshot& now)>;
 
-    void Start(unsigned intervalMs, ChangeHandler onChange);
+    // `onSample` is called on every poll, after `onChange`. Used for work that needs
+    // every sample rather than transitions only: anchor learning and watchdog timing.
+    using SampleHandler = std::function<void(const Snapshot& now)>;
+
+    void Start(unsigned intervalMs, ChangeHandler onChange, SampleHandler onSample = {});
     void Stop();
 
     Snapshot Current() const;
@@ -48,6 +52,7 @@ private:
     std::thread       thread_;
     std::atomic<bool> running_ {false};
     ChangeHandler     onChange_;
+    SampleHandler     onSample_;
 
     mutable CRITICAL_SECTION lock_ {};
     bool      lockInit_ = false;

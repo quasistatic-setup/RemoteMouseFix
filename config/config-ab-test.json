@@ -1,16 +1,16 @@
 {
-  "_about": "RemoteMouseFix default configuration: observe only. Keys starting with _ are comments.",
+  "_about": "RemoteMouseFix A/B test configuration: correction permitted, starts off, switched by hotkey. Keys starting with _ are comments.",
 
   "_target_process": "Executable to observe, matched case-insensitively on the file name.",
   "target_process": "Wow.exe",
 
   "_diagnostic_mode": "true: input is never modified and no correction mode can be enabled. false: correction modes become available (see config-ab-test.json).",
-  "diagnostic_mode": true,
+  "diagnostic_mode": false,
 
   "_log_mouse_moves": "false records buttons, wheel and state transitions only, which keeps logs small.",
   "log_mouse_moves": true,
 
-  "_correction_mode": "Mode at startup: off, absolute or relative. Only effective with diagnostic_mode false.",
+  "_correction_mode": "Starts off on purpose. Switch while running: Ctrl+Alt+1 absolute, Ctrl+Alt+2 relative, Ctrl+Alt+C off.",
   "correction_mode": "off",
 
   "_watchdogs": "Switch the correction off automatically. max_hidden_ms 0 disables that one check.",

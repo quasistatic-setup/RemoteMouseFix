@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(RemoteMouseFix
-    VERSION 0.1.0
-    DESCRIPTION "Diagnostic tool for mouse/camera jumps in 3D games over remote desktop software"
+    VERSION 0.2.0
+    DESCRIPTION "Diagnostics and guarded correction for mouse/camera jumps in 3D games over remote desktop software"
     LANGUAGES CXX)
 
 if(NOT WIN32)
@@ -21,14 +21,46 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# x64 only for now. Phase 1 has no 32-bit target.
+# x64 only for now.
 if(CMAKE_SIZEOF_VOID_P AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "RemoteMouseFix currently supports x64 only (got ${CMAKE_SIZEOF_VOID_P}-byte pointers).")
 endif()
 
+option(RMF_BUILD_PROBE "Build MouseLookProbe, the stand-in game used to test the correction" ON)
+
+configure_file(cmake/Version.h.in "${CMAKE_BINARY_DIR}/generated/rmf/Version.h" @ONLY)
+
+# Settings shared by every executable: same defines, same warnings, static runtime so each
+# EXE stays a single portable file.
+function(rmf_apply_common_settings target)
+    target_include_directories(${target} PRIVATE
+        "${CMAKE_SOURCE_DIR}/include"
+        "${CMAKE_BINARY_DIR}/generated")
+
+    target_compile_definitions(${target} PRIVATE
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        _WIN32_WINNT=0x0A00      # Windows 10
+        WINVER=0x0A00)
+
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
+        target_compile_options(${target} PRIVATE $<$<CONFIG:Release>:/O2>)
+        set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_options(${target} PRIVATE -static -static-libgcc -static-libstdc++)
+    endif()
+
+    set_target_properties(${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+endfunction()
+
 add_executable(RemoteMouseFix
     src/main.cpp
     src/Config.cpp
+    src/Correction.cpp
     src/EventRecord.cpp
     src/Logger.cpp
     src/MouseHook.cpp
@@ -36,47 +68,26 @@ add_executable(RemoteMouseFix
     src/StateSampler.cpp
     src/WinCompat.cpp
 )
+rmf_apply_common_settings(RemoteMouseFix)
+target_link_libraries(RemoteMouseFix PRIVATE user32 gdi32 shell32 shcore)
 
-configure_file(cmake/Version.h.in "${CMAKE_BINARY_DIR}/generated/rmf/Version.h" @ONLY)
-
-target_include_directories(RemoteMouseFix PRIVATE include "${CMAKE_BINARY_DIR}/generated")
-
-target_compile_definitions(RemoteMouseFix PRIVATE
-    UNICODE
-    _UNICODE
-    WIN32_LEAN_AND_MEAN
-    NOMINMAX
-    _WIN32_WINNT=0x0A00      # Windows 10
-    WINVER=0x0A00
-)
-
-target_link_libraries(RemoteMouseFix PRIVATE user32 shell32 shcore)
-
-if(MSVC)
-    target_compile_options(RemoteMouseFix PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    target_compile_options(RemoteMouseFix PRIVATE $<$<CONFIG:Release>:/O2>)
-    # Static CRT keeps the tool portable: a single EXE, no redistributable needed.
-    set_property(TARGET RemoteMouseFix PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-else()
-    target_compile_options(RemoteMouseFix PRIVATE -Wall -Wextra -Wpedantic)
-    # Fully static link so the EXE runs on any Windows 10/11 box without MinGW DLLs.
-    target_link_options(RemoteMouseFix PRIVATE -static -static-libgcc -static-libstdc++)
-endif()
-
-# Console subsystem on purpose: the operator watches live status output.
-set_target_properties(RemoteMouseFix PROPERTIES
-    OUTPUT_NAME "RemoteMouseFix"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-# Ship config.json next to the EXE so the build output is directly portable.
+# Ship both configs next to the EXE so the build output is directly usable.
 add_custom_command(TARGET RemoteMouseFix POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/config/config.json"
-            "$<TARGET_FILE_DIR:RemoteMouseFix>/config.json"
-    COMMENT "Copying config/config.json next to RemoteMouseFix.exe")
+            "${CMAKE_SOURCE_DIR}/config/config-ab-test.json"
+            "$<TARGET_FILE_DIR:RemoteMouseFix>"
+    COMMENT "Copying config files next to RemoteMouseFix.exe")
+
+if(RMF_BUILD_PROBE)
+    add_executable(MouseLookProbe WIN32
+        tools/probe/MouseLookProbe.cpp
+        src/WinCompat.cpp
+    )
+    rmf_apply_common_settings(MouseLookProbe)
+    target_link_libraries(MouseLookProbe PRIVATE user32 gdi32 shell32)
+endif()
 
 install(TARGETS RemoteMouseFix RUNTIME DESTINATION .)
-install(FILES config/config.json README.md LICENSE DESTINATION .)
+install(FILES config/config.json config/config-ab-test.json README.md LICENSE DESTINATION .)
 install(FILES docs/diagnostics.md DESTINATION docs)

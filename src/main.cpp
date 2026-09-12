@@ -1,20 +1,26 @@
-// RemoteMouseFix - Phase 1: diagnostics only.
+// RemoteMouseFix - diagnostics with an optional, guarded correction.
 //
 // Observes the low-level mouse stream while a configured target process owns the
-// foreground window, and writes a human readable trace. It installs exactly one
-// WH_MOUSE_LL hook and always forwards every event unchanged.
+// foreground window and writes a human readable trace. With diagnostic_mode = false it
+// can additionally correct the conflict measured on 2026-09-12 (docs/findings-2026-09-12.md):
+// a remote client's absolute pointer position overwriting the game's cursor warp.
 //
-// What this build deliberately does NOT do:
+// The correction is deliberately narrow. It only ever withholds injected mouse moves from
+// someone other than this tool, and only while the target is in front with its cursor
+// hidden. It then hands the remote pointer's own movement on via signed SendInput. Buttons, wheel and physical
+// input always pass untouched. It starts in the configured mode (off by default), can be
+// switched off instantly by hotkey, and watchdogs switch it off on any sign of trouble.
+//
+// What this tool does not do, in any mode:
 //  * no DLL injection, no driver, no code loaded into the game
-//  * no SendInput / mouse_event / SetCursorPos / ClipCursor - it never writes input
-//  * no filtering, correction or suppression of any event
+//  * no ClipCursor, no change to the game or its files
 //  * no keyboard hook, so no keystroke or text content can be recorded
 //  * no network access of any kind
-// Phase 2 can add correction; Phase 1 exists to produce the evidence first.
 
 #include "rmf/Version.h"
 
 #include "rmf/Config.h"
+#include "rmf/Correction.h"
 #include "rmf/EventQueue.h"
 #include "rmf/EventRecord.h"
 #include "rmf/Logger.h"
@@ -30,7 +36,9 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cwchar>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -39,13 +47,32 @@
 namespace {
 
 // Hotkey ids. RegisterHotKey is used instead of a keyboard hook on purpose: it can only
-// ever observe these two specific combinations, so the tool remains incapable of
-// recording keystrokes or text.
-constexpr int kHotkeyMarker = 1; // Ctrl+Alt+M: drop a marker line into the log
-constexpr int kHotkeyPause  = 2; // Ctrl+Alt+P: pause / resume capture
-constexpr int kHotkeyQuit   = 3; // Ctrl+Alt+Q: clean shutdown
+// ever observe these specific combinations, so the tool remains incapable of recording
+// keystrokes or text.
+constexpr int kHotkeyMarker             = 1; // Ctrl+Alt+M
+constexpr int kHotkeyPause              = 2; // Ctrl+Alt+P
+constexpr int kHotkeyQuit               = 3; // Ctrl+Alt+Q
+constexpr int kHotkeyCorrectionOff      = 4; // Ctrl+Alt+C, emergency off
+constexpr int kHotkeyCorrectionAbsolute = 5; // Ctrl+Alt+1
+constexpr int kHotkeyCorrectionRelative = 6; // Ctrl+Alt+2
+
+struct HotkeySpec {
+    int            id;
+    UINT           vk;
+    const wchar_t* label;
+};
+
+constexpr HotkeySpec kHotkeys[] = {
+    {kHotkeyMarker,             'M', L"Ctrl+Alt+M marker"},
+    {kHotkeyPause,              'P', L"Ctrl+Alt+P pause logging"},
+    {kHotkeyQuit,               'Q', L"Ctrl+Alt+Q quit"},
+    {kHotkeyCorrectionOff,      'C', L"Ctrl+Alt+C correction off"},
+    {kHotkeyCorrectionAbsolute, '1', L"Ctrl+Alt+1 correction absolute"},
+    {kHotkeyCorrectionRelative, '2', L"Ctrl+Alt+2 correction relative"},
+};
 
 constexpr UINT kMsgQuitRequested = WM_APP + 1;
+constexpr UINT kMsgApplyDelta    = WM_APP + 2; // posted by the hook: wParam = dx, lParam = dy
 
 std::atomic<bool> g_running {true};
 DWORD             g_mainThreadId = 0;
@@ -98,18 +125,24 @@ void ConsoleOut(const wchar_t* format, ...) {
     }
 }
 
+std::wstring Format(const wchar_t* format, ...) {
+    wchar_t buffer[1024];
+    va_list args;
+    va_start(args, format);
+    const int written = vswprintf(buffer, 1024, format, args);
+    va_end(args);
+    return written > 0 ? std::wstring(buffer, static_cast<std::size_t>(written)) : std::wstring();
+}
+
 std::wstring NowStampReadable() {
     SYSTEMTIME st {};
     GetLocalTime(&st);
-    wchar_t buf[64];
-    swprintf(buf, 64, L"%04u-%02u-%02u %02u:%02u:%02u",
-             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-    return buf;
+    return Format(L"%04u-%02u-%02u %02u:%02u:%02u",
+                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 }
 
 std::wstring OsVersionString() {
-    // GetVersionEx lies for unmanifested apps, so read the real build from ntoskrnl's
-    // sibling: RtlGetVersion is not subject to compatibility shimming.
+    // GetVersionEx lies for unmanifested apps; RtlGetVersion is not shimmed.
     using RtlGetVersionFn = LONG (WINAPI*)(PRTL_OSVERSIONINFOW);
     if (HMODULE ntdll = GetModuleHandleW(L"ntdll.dll")) {
         auto rtlGetVersion = reinterpret_cast<RtlGetVersionFn>(
@@ -118,20 +151,18 @@ std::wstring OsVersionString() {
             RTL_OSVERSIONINFOW info {};
             info.dwOSVersionInfoSize = sizeof(info);
             if (rtlGetVersion(&info) == 0) {
-                wchar_t buf[64];
-                swprintf(buf, 64, L"Windows %lu.%lu build %lu",
-                         info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber);
-                return buf;
+                return Format(L"Windows %lu.%lu build %lu",
+                              info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber);
             }
         }
     }
     return L"Windows (version unavailable)";
 }
 
-// Serialises the two writers into the log: the drain thread and the sampler callback.
-std::mutex           g_logMutex;
-rmf::Logger*         g_logger = nullptr;
-std::atomic<bool>    g_flushPending {false};
+// Serialises every writer into the log: drain thread, sampler, heartbeat, message loop.
+std::mutex        g_logMutex;
+rmf::Logger*      g_logger = nullptr;
+std::atomic<bool> g_flushPending {false};
 
 void LogLine(const std::wstring& line) {
     std::lock_guard<std::mutex> guard(g_logMutex);
@@ -157,19 +188,23 @@ void FlushLog() {
     }
 }
 
+unsigned long long U(const std::atomic<std::uint64_t>& value) {
+    return static_cast<unsigned long long>(value.load(std::memory_order_relaxed));
+}
+
 } // namespace
 
 int main() {
     g_mainThreadId = GetCurrentThreadId();
 
-    // DPI awareness before anything reads a coordinate: the hook reports physical
-    // pixels, and every rectangle we compare against must be in the same space.
+    // DPI awareness before anything reads a coordinate: the hook reports physical pixels,
+    // and absolute SendInput must be computed in the same space.
     const std::wstring dpiMode = rmf::InitDpiAwareness();
 
     SetConsoleCtrlHandler(&ConsoleCtrlHandler, TRUE);
-    SetConsoleTitleW(L"RemoteMouseFix " RMF_VERSION_W L" - diagnostics");
+    SetConsoleTitleW(L"RemoteMouseFix " RMF_VERSION_W);
 
-    // Command line: an alternative config path and an optional auto-stop timeout.
+    // ---- command line --------------------------------------------------------------
     std::wstring configPath;
     unsigned runSeconds = 0; // 0 = run until the operator stops the tool
     {
@@ -178,13 +213,17 @@ int main() {
             for (int i = 1; i < argc; ++i) {
                 const std::wstring arg = argv[i];
                 if (arg == L"--help" || arg == L"-h" || arg == L"/?") {
-                    ConsoleOut(L"RemoteMouseFix %ls - Phase 1 diagnostics\n\n"
+                    ConsoleOut(L"RemoteMouseFix %ls - diagnostics with optional correction\n\n"
                                L"Usage: RemoteMouseFix.exe [path\\to\\config.json] [--seconds N]\n\n"
                                L"  --seconds N  stop automatically after N seconds (0 = run until stopped)\n\n"
                                L"Hotkeys while running:\n"
                                L"  Ctrl+Alt+M   write a marker line into the log\n"
-                               L"  Ctrl+Alt+P   pause / resume capture\n"
-                               L"  Ctrl+Alt+Q   quit (Ctrl+C works too)\n",
+                               L"  Ctrl+Alt+P   pause / resume logging (correction keeps running)\n"
+                               L"  Ctrl+Alt+Q   quit (Ctrl+C works too)\n"
+                               L"  Ctrl+Alt+C   correction OFF (emergency off)\n"
+                               L"  Ctrl+Alt+1   correction absolute\n"
+                               L"  Ctrl+Alt+2   correction relative\n\n"
+                               L"Correction modes need diagnostic_mode = false in the config.\n",
                                RMF_VERSION_W);
                     LocalFree(argv);
                     return 0;
@@ -200,26 +239,13 @@ int main() {
             LocalFree(argv);
         }
     }
-    if (configPath.empty()) {
-        configPath = rmf::ResolveAgainstExeDir(L"config.json");
-    } else {
-        configPath = rmf::ResolveAgainstExeDir(configPath);
-    }
+    configPath = rmf::ResolveAgainstExeDir(configPath.empty() ? std::wstring(L"config.json") : configPath);
 
     rmf::Config cfg;
     rmf::LoadConfig(configPath, cfg);
 
-    ConsoleOut(L"RemoteMouseFix %ls - Phase 1 diagnostics (observe only)\n", RMF_VERSION_W);
+    ConsoleOut(L"RemoteMouseFix %ls - diagnostics with optional correction\n", RMF_VERSION_W);
     ConsoleOut(L"----------------------------------------------------------\n");
-
-    // Phase 1 has no correction path at all, so running with diagnostic_mode off would
-    // silently do nothing. Refuse instead of pretending.
-    if (!cfg.diagnosticMode) {
-        ConsoleOut(L"config has diagnostic_mode = false, but this build contains no\n"
-                   L"filtering and no input synthesis. Set diagnostic_mode = true.\n");
-        return 2;
-    }
-
     for (const auto& warning : cfg.warnings) {
         ConsoleOut(L"  config warning: %ls\n", warning.c_str());
     }
@@ -240,22 +266,44 @@ int main() {
     LARGE_INTEGER qpcFreqLi {};
     QueryPerformanceFrequency(&qpcFreqLi);
     const std::int64_t qpcFreq = qpcFreqLi.QuadPart;
-
     LARGE_INTEGER qpcStartLi {};
     QueryPerformanceCounter(&qpcStartLi);
     const std::int64_t qpcStart = qpcStartLi.QuadPart;
-
     FILETIME wallStart {};
     GetSystemTimeAsFileTime(&wallStart);
 
+    // ---- hotkeys and correction permission ------------------------------------------
+    // Registered before anything else runs, because whether the emergency-off key exists
+    // decides whether a correction mode may be enabled at all.
+    std::vector<std::wstring> failedHotkeys;
+    bool offHotkeyRegistered = false;
+    for (const auto& hotkey : kHotkeys) {
+        if (RegisterHotKey(nullptr, hotkey.id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, hotkey.vk)) {
+            if (hotkey.id == kHotkeyCorrectionOff) {
+                offHotkeyRegistered = true;
+            }
+        } else {
+            failedHotkeys.push_back(Format(L"%ls (error %lu, probably used by another program)",
+                                           hotkey.label, GetLastError()));
+        }
+    }
+
+    rmf::CorrectionState correction;
+    std::wstring lockReason;
+    if (cfg.diagnosticMode) {
+        lockReason = L"diagnostic_mode = true";
+    } else if (!offHotkeyRegistered) {
+        lockReason = L"emergency-off hotkey Ctrl+Alt+C could not be registered";
+    }
+    correction.allowed = lockReason.empty(); // written before the hook exists, read-only after
+
     const bool elevated = rmf::IsProcessElevated();
 
-    // Session header. Everything needed to interpret the trace later lives here, so a
-    // log file is self-describing when it comes back for analysis.
+    // ---- session header --------------------------------------------------------------
     {
         std::vector<std::wstring> header;
         header.push_back(L"# =====================================================================");
-        header.push_back(L"# RemoteMouseFix " RMF_VERSION_W L" - Phase 1 diagnostic log");
+        header.push_back(L"# RemoteMouseFix " RMF_VERSION_W L" - diagnostic log");
         header.push_back(L"# started        : " + NowStampReadable());
         header.push_back(L"# os             : " + OsVersionString());
         header.push_back(L"# dpi awareness  : " + dpiMode);
@@ -263,39 +311,48 @@ int main() {
         header.push_back(L"# config file    : " + (cfg.loadedFrom.empty() ? L"<defaults>" : cfg.loadedFrom));
         header.push_back(L"# target process : " + cfg.targetProcess);
         header.push_back(L"# log mouse moves: " + std::wstring(cfg.logMouseMoves ? L"yes" : L"no"));
-        {
-            wchar_t buf[256];
-            swprintf(buf, 256, L"# thresholds     : jump>=%dpx  recenter<=%dpx  state_poll=%ums",
-                     cfg.jumpThresholdPx, cfg.recenterTolerancePx, cfg.statePollIntervalMs);
-            header.push_back(buf);
-            swprintf(buf, 256, L"# heartbeat      : every %u ms (0 = off)", cfg.heartbeatIntervalMs);
-            header.push_back(buf);
-            swprintf(buf, 256, L"# rotation       : %llu bytes, keep %u files",
-                     static_cast<unsigned long long>(cfg.maxLogBytes), cfg.maxLogFiles);
-            header.push_back(buf);
-            swprintf(buf, 256, L"# virtual screen : %dx%d at (%d,%d), monitors=%d",
-                     GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN),
-                     GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
-                     GetSystemMetrics(SM_CMONITORS));
-            header.push_back(buf);
-        }
+        header.push_back(L"# diagnostic mode: " + std::wstring(cfg.diagnosticMode ? L"yes" : L"no"));
+        header.push_back(L"# correction     : " +
+                         (correction.allowed
+                              ? L"permitted, start=" + std::wstring(rmf::CorrectionModeName(cfg.correctionMode))
+                              : L"LOCKED OFF (" + lockReason + L")"));
+        header.push_back(Format(L"# watchdog       : max_hidden=%ums max_unechoed=%u max_output_failures=%u",
+                                cfg.watchdogMaxHiddenMs, cfg.watchdogMaxUnechoed,
+                                cfg.watchdogMaxOutputFailures));
+        header.push_back(Format(L"# thresholds     : jump>=%dpx  anchor<=%dpx  state_poll=%ums",
+                                cfg.jumpThresholdPx, cfg.anchorTolerancePx, cfg.statePollIntervalMs));
+        header.push_back(Format(L"# heartbeat      : every %u ms (0 = off)", cfg.heartbeatIntervalMs));
+        header.push_back(Format(L"# rotation       : %llu bytes, keep %u files",
+                                static_cast<unsigned long long>(cfg.maxLogBytes), cfg.maxLogFiles));
+        header.push_back(Format(L"# virtual screen : %dx%d at (%d,%d), monitors=%d",
+                                GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN),
+                                GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
+                                GetSystemMetrics(SM_CMONITORS)));
 
-        // Pointer speed and the "enhance pointer precision" acceleration curve both
-        // change how a relative delta becomes a cursor movement, so they belong in the
-        // record of any mouse investigation.
+        // Pointer speed and acceleration change how a relative delta becomes cursor motion,
+        // which matters directly for the relative correction mode.
         int mouseParams[3] = {0, 0, 0};
         int mouseSpeed = 0;
         SystemParametersInfoW(SPI_GETMOUSE, 0, mouseParams, 0);
         SystemParametersInfoW(SPI_GETMOUSESPEED, 0, &mouseSpeed, 0);
-        {
-            wchar_t buf[256];
-            swprintf(buf, 256, L"# MOUSECFG      : speed=%d threshold1=%d threshold2=%d acceleration=%d",
-                     mouseSpeed, mouseParams[0], mouseParams[1], mouseParams[2]);
-            header.push_back(buf);
+        header.push_back(Format(L"# MOUSECFG      : speed=%d threshold1=%d threshold2=%d acceleration=%d",
+                                mouseSpeed, mouseParams[0], mouseParams[1], mouseParams[2]));
+
+        for (const auto& failed : failedHotkeys) {
+            header.push_back(L"# HOTKEY FAILED  : " + failed);
+        }
+        for (const auto& warning : cfg.warnings) {
+            header.push_back(L"# CONFIG WARNING : " + warning);
         }
 
         header.push_back(L"#");
-        header.push_back(L"# guarantees: no input is modified, no keyboard is recorded, no network is used.");
+        if (correction.allowed) {
+            header.push_back(L"# guarantees: input is modified only while a correction mode is on, and then only");
+            header.push_back(L"#   injected moves from another program while the target holds a hidden cursor.");
+            header.push_back(L"#   Buttons, wheel and physical input always pass. No keyboard is recorded, no network is used.");
+        } else {
+            header.push_back(L"# guarantees: no input is modified, no keyboard is recorded, no network is used.");
+        }
         header.push_back(L"# column reference: docs/diagnostics.md");
         header.push_back(L"# =====================================================================");
         LogLines(header);
@@ -305,39 +362,61 @@ int main() {
     ConsoleOut(L"  target process : %ls\n", cfg.targetProcess.c_str());
     ConsoleOut(L"  dpi awareness  : %ls\n", dpiMode.c_str());
     ConsoleOut(L"  log file       : %ls\n", logger.CurrentPath().c_str());
-    ConsoleOut(L"  log mouse moves: %ls\n", cfg.logMouseMoves ? L"yes" : L"no");
+    ConsoleOut(L"  correction     : %ls\n",
+               correction.allowed ? L"permitted (Ctrl+Alt+1 / Ctrl+Alt+2, Ctrl+Alt+C = off)"
+                                  : (L"LOCKED OFF - " + lockReason).c_str());
+    for (const auto& failed : failedHotkeys) {
+        ConsoleOut(L"  HOTKEY FAILED  : %ls\n", failed.c_str());
+    }
     ConsoleOut(L"\n");
 
-    rmf::MouseEventQueue   queue;
+    // The ring holds 16384 events of well over 100 bytes each, several megabytes: far too
+    // large for the default 1 MB (MSVC) or 2 MB (MinGW) main-thread stack. On the stack it
+    // overflows at entry to main as soon as RawEvent grows, so it lives on the heap.
+    const auto queueStorage = std::make_unique<rmf::MouseEventQueue>();
+    rmf::MouseEventQueue&  queue = *queueStorage;
     rmf::MouseHook::Filter filter;
     filter.logMouseMoves.store(cfg.logMouseMoves);
 
-    rmf::ProcessNameCache samplerNames(cfg.targetProcess);
+    // Any thread may trip a watchdog. Only a real transition logs, so repeated trips of an
+    // already inactive correction stay silent.
+    auto tripWatchdog = [&](const std::wstring& reason) {
+        const rmf::CorrectionMode was = correction.ForceOff();
+        if (was == rmf::CorrectionMode::Off) {
+            return;
+        }
+        correction.watchdogTrips.fetch_add(1);
+        LogLine(L"## CORRECTION DISABLED by watchdog: " + reason + L" (was " +
+                rmf::CorrectionModeName(was) + L")");
+        FlushLog();
+        ConsoleOut(L"\n  !! correction switched OFF by watchdog: %ls\n", reason.c_str());
+    };
 
-    // The sampler owns target discovery: it publishes the PID to the hook only while
-    // the target process actually holds the foreground window. That single atomic is
-    // what makes the hook's fast path both cheap and exactly scoped.
+    // ---- state sampler -----------------------------------------------------------------
+    rmf::ProcessNameCache samplerNames(cfg.targetProcess);
     std::atomic<bool> targetInForeground {false};
-    std::atomic<DWORD> lastTargetPid {0};
+
+    // Sampler thread only.
+    rmf::AnchorLearner anchorLearner;
+    bool          holdPhaseOpen    = false;
+    RECT          holdPhaseClient  {0, 0, 0, 0};
+    ULONGLONG     hiddenSince      = 0;
+    std::uint32_t hiddenGeneration = 0;
 
     rmf::StateSampler sampler;
     sampler.Start(cfg.statePollIntervalMs,
         [&](const rmf::StateSampler::Snapshot& prev, const rmf::StateSampler::Snapshot& now) {
+            // The sampler owns target discovery: it publishes the PID to the hook only while
+            // the target actually holds the foreground window.
             const bool isTarget = samplerNames.IsTargetPid(now.foregroundPid);
             filter.targetPid.store(isTarget ? now.foregroundPid : 0, std::memory_order_relaxed);
             targetInForeground.store(isTarget);
-            if (isTarget) {
-                lastTargetPid.store(now.foregroundPid);
-            }
 
             if (!cfg.logStateChanges) {
                 return;
             }
-
-            // Focus transitions are logged in both directions, because "something else
-            // took the foreground mid-drag" is itself a prime suspect. These lines carry
-            // a window handle and a process name, never any input data, so the rule that
-            // no foreign input reaches the file still holds.
+            // Focus transitions are logged in both directions: "something else took the
+            // foreground mid-drag" is itself a suspect. No foreign input is recorded.
             const bool focusChanged = (now.foreground != prev.foreground) ||
                                       (now.foregroundPid != prev.foregroundPid);
             if (focusChanged && !isTarget) {
@@ -346,18 +425,100 @@ int main() {
                         samplerNames.NameForPid(now.foregroundPid));
                 return;
             }
-
-            // Detailed state (cursor visibility, ClipCursor, geometry, DPI) only while
-            // the target actually owns the foreground.
             if (!isTarget) {
                 return;
             }
             LogLine(rmf::FormatStateLine(prev, now, samplerNames.NameForPid(now.foregroundPid)));
+        },
+        [&](const rmf::StateSampler::Snapshot& now) {
+            const bool holding = targetInForeground.load() && !now.cursorVisible;
+
+            if (holding) {
+                const ULONGLONG tick = GetTickCount64();
+                const std::uint32_t generation = correction.generation.load();
+                if (!holdPhaseOpen || generation != hiddenGeneration) {
+                    // The watchdog clock starts with the hold, or with the latest mode
+                    // change, so re-enabling during a long hold does not trip at once.
+                    hiddenSince      = tick;
+                    hiddenGeneration = generation;
+                }
+                holdPhaseOpen   = true;
+                holdPhaseClient = now.clientScreenRect;
+                anchorLearner.Add(now.cursorPos);
+
+                if (cfg.watchdogMaxHiddenMs > 0 &&
+                    correction.Mode() != rmf::CorrectionMode::Off &&
+                    tick - hiddenSince > cfg.watchdogMaxHiddenMs) {
+                    tripWatchdog(Format(L"cursor hidden continuously for more than %u ms",
+                                        cfg.watchdogMaxHiddenMs));
+                }
+                return;
+            }
+
+            if (!holdPhaseOpen) {
+                return;
+            }
+            holdPhaseOpen = false;
+
+            POINT anchor {};
+            unsigned hits = 0, total = 0;
+            if (!anchorLearner.Finish(anchor, hits, total)) {
+                return;
+            }
+            const long offsetX = anchor.x - holdPhaseClient.left;
+            const long offsetY = anchor.y - holdPhaseClient.top;
+            const bool changed = !filter.anchorValid.load() ||
+                                 filter.anchorOffsetX.load() != offsetX ||
+                                 filter.anchorOffsetY.load() != offsetY;
+            filter.anchorOffsetX.store(offsetX);
+            filter.anchorOffsetY.store(offsetY);
+            filter.anchorValid.store(true);
+            if (changed && cfg.logStateChanges) {
+                LogLine(Format(L"## STATE anchor-learned=(%ld,%ld) client_offset=(%ld,%ld) hits=%u/%u",
+                               anchor.x, anchor.y, offsetX, offsetY, hits, total));
+            }
         });
 
+    // ---- mode switching (message-loop thread only) ------------------------------------
+    unsigned consecutiveOutputFailures = 0;
+
+    auto switchMode = [&](rmf::CorrectionMode target, const wchar_t* source) {
+        if (target != rmf::CorrectionMode::Off && !correction.allowed) {
+            LogLine(L"## CORRECTION refused mode=" + std::wstring(rmf::CorrectionModeName(target)) +
+                    L": " + lockReason);
+            FlushLog();
+            ConsoleOut(L"\n  correction refused: %ls\n", lockReason.c_str());
+            return;
+        }
+        const rmf::CorrectionMode previous = correction.SetMode(target);
+        consecutiveOutputFailures = 0;
+        LogLine(Format(L"## CORRECTION mode=%ls previous=%ls source=%ls",
+                       rmf::CorrectionModeName(target), rmf::CorrectionModeName(previous), source));
+        FlushLog();
+        ConsoleOut(L"\n  correction: %ls\n", rmf::CorrectionModeName(target));
+    };
+
+    if (cfg.correctionMode != rmf::CorrectionMode::Off) {
+        if (correction.allowed) {
+            switchMode(cfg.correctionMode, L"config");
+        } else {
+            LogLine(L"## CORRECTION config correction_mode=" +
+                    std::wstring(rmf::CorrectionModeName(cfg.correctionMode)) +
+                    L" ignored: " + lockReason);
+        }
+    }
+
+    // ---- hook ---------------------------------------------------------------------------
     rmf::MouseHook hook;
+    rmf::MouseHook::Wiring wiring;
+    wiring.queue        = &queue;
+    wiring.filter       = &filter;
+    wiring.correction   = &correction;
+    wiring.applyThread  = g_mainThreadId;
+    wiring.applyMessage = kMsgApplyDelta;
+
     DWORD hookError = 0;
-    if (!hook.Install(queue, filter, hookError)) {
+    if (!hook.Install(wiring, hookError)) {
         ConsoleOut(L"  FATAL: SetWindowsHookEx(WH_MOUSE_LL) failed, error %lu\n", hookError);
         sampler.Stop();
         LogLine(L"# FATAL: SetWindowsHookEx(WH_MOUSE_LL) failed, error " + std::to_wstring(hookError));
@@ -365,21 +526,15 @@ int main() {
         return 4;
     }
 
-    RegisterHotKey(nullptr, kHotkeyMarker, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'M');
-    RegisterHotKey(nullptr, kHotkeyPause,  MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P');
-    RegisterHotKey(nullptr, kHotkeyQuit,   MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'Q');
-
-    ConsoleOut(L"  hook installed. Hotkeys: Ctrl+Alt+M marker | Ctrl+Alt+P pause | Ctrl+Alt+Q quit\n");
+    ConsoleOut(L"  hook installed. Ctrl+Alt+M marker | Ctrl+Alt+P pause | Ctrl+Alt+Q quit\n");
     if (runSeconds > 0) {
         ConsoleOut(L"  auto-stop in %u seconds\n", runSeconds);
     }
     ConsoleOut(L"  waiting for %ls to come to the foreground...\n\n", cfg.targetProcess.c_str());
 
-    // ---- writer thread -------------------------------------------------------------
-    // Drains the ring, resolves process names, derives deltas and writes the lines.
-    // Kept off the hook thread so no disk I/O can ever delay an input event.
+    // ---- writer thread -----------------------------------------------------------------
     std::atomic<std::uint64_t> writtenEvents {0};
-    std::atomic<std::uint64_t> recenterCount {0};
+    std::atomic<std::uint64_t> anchorCount   {0};
     std::atomic<std::uint64_t> jumpCount     {0};
     std::atomic<std::uint64_t> injectedCount {0};
 
@@ -390,106 +545,111 @@ int main() {
         bool  havePrevious = false;
         DWORD previousTime = 0;
 
+        auto decorate = [&](const rmf::RawEvent& raw, rmf::DecoratedEvent& ev) {
+            ev.raw             = &raw;
+            ev.injected        = (raw.hookFlags & LLMHF_INJECTED) != 0;
+            ev.lowerIlInjected = (raw.hookFlags & LLMHF_LOWER_IL_INJECTED) != 0;
+            ev.processName     = names.NameForPid(raw.foregroundPid);
+
+            if (havePrevious) {
+                ev.dx   = raw.pt.x - previousPt.x;
+                ev.dy   = raw.pt.y - previousPt.y;
+                ev.dtMs = static_cast<long>(raw.hookTimeMs - previousTime);
+            } else {
+                ev.dtMs = -1;
+            }
+            const bool hadPrevious = havePrevious;
+            previousPt   = raw.pt;
+            previousTime = raw.hookTimeMs;
+            havePrevious = true;
+
+            if (raw.haveGeometry) {
+                ev.client.x   = raw.pt.x - raw.clientScreenRect.left;
+                ev.client.y   = raw.pt.y - raw.clientScreenRect.top;
+                ev.centreDx   = raw.pt.x - (raw.clientScreenRect.left + raw.clientScreenRect.right) / 2;
+                ev.centreDy   = raw.pt.y - (raw.clientScreenRect.top + raw.clientScreenRect.bottom) / 2;
+                ev.haveClient = true;
+
+                if (raw.anchorValid && raw.cursorHidden) {
+                    ev.anchorDx   = raw.pt.x - (raw.clientScreenRect.left + raw.anchorOffset.x);
+                    ev.anchorDy   = raw.pt.y - (raw.clientScreenRect.top + raw.anchorOffset.y);
+                    ev.haveAnchor = true;
+                }
+            }
+
+            // A withheld move never reached the game, so its position says nothing about
+            // whether the game's warp held.
+            if (raw.kind == rmf::EventKind::Move && !raw.suppressed && ev.haveAnchor &&
+                std::abs(ev.anchorDx) <= cfg.anchorTolerancePx &&
+                std::abs(ev.anchorDy) <= cfg.anchorTolerancePx) {
+                ev.atAnchor = true;
+                anchorCount.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            if (hadPrevious &&
+                (std::abs(ev.dx) >= cfg.jumpThresholdPx || std::abs(ev.dy) >= cfg.jumpThresholdPx)) {
+                ev.looksLikeJump = true;
+                jumpCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (ev.injected) {
+                injectedCount.fetch_add(1, std::memory_order_relaxed);
+            }
+        };
+
         rmf::RawEvent raw;
         while (g_running.load(std::memory_order_relaxed)) {
             bool didWork = false;
             while (queue.Pop(raw)) {
                 didWork = true;
-
+                if (raw.kind == rmf::EventKind::Apply) {
+                    LogLine(rmf::FormatApplyLine(raw, qpcFreq, qpcStart, wallStart));
+                    continue;
+                }
                 rmf::DecoratedEvent ev;
-                ev.raw = &raw;
-                ev.injected        = (raw.hookFlags & LLMHF_INJECTED) != 0;
-                ev.lowerIlInjected = (raw.hookFlags & LLMHF_LOWER_IL_INJECTED) != 0;
-                ev.processName     = names.NameForPid(raw.foregroundPid);
-
-                if (havePrevious) {
-                    ev.dx   = raw.pt.x - previousPt.x;
-                    ev.dy   = raw.pt.y - previousPt.y;
-                    ev.dtMs = static_cast<long>(raw.hookTimeMs - previousTime);
-                } else {
-                    ev.dtMs = -1;
-                }
-                previousPt   = raw.pt;
-                previousTime = raw.hookTimeMs;
-                havePrevious = true;
-
-                if (raw.haveGeometry) {
-                    ev.client.x = raw.pt.x - raw.clientScreenRect.left;
-                    ev.client.y = raw.pt.y - raw.clientScreenRect.top;
-                    const long centreX = (raw.clientScreenRect.left + raw.clientScreenRect.right) / 2;
-                    const long centreY = (raw.clientScreenRect.top + raw.clientScreenRect.bottom) / 2;
-                    ev.centreDx  = raw.pt.x - centreX;
-                    ev.centreDy  = raw.pt.y - centreY;
-                    ev.haveClient = true;
-                }
-
-                // Recenter signature: the game warps the pointer with SetCursorPos,
-                // which surfaces here as an injected move landing on the client centre.
-                if (raw.kind == rmf::EventKind::Move && ev.injected && ev.haveClient &&
-                    std::abs(ev.centreDx) <= cfg.recenterTolerancePx &&
-                    std::abs(ev.centreDy) <= cfg.recenterTolerancePx) {
-                    ev.looksLikeRecenter = true;
-                    recenterCount.fetch_add(1, std::memory_order_relaxed);
-                }
-
-                if (havePrevious &&
-                    (std::abs(ev.dx) >= cfg.jumpThresholdPx ||
-                     std::abs(ev.dy) >= cfg.jumpThresholdPx)) {
-                    ev.looksLikeJump = true;
-                    jumpCount.fetch_add(1, std::memory_order_relaxed);
-                }
-
-                if (ev.injected) {
-                    injectedCount.fetch_add(1, std::memory_order_relaxed);
-                }
-
+                decorate(raw, ev);
                 LogLine(rmf::FormatEventLine(ev, qpcFreq, qpcStart, wallStart));
                 writtenEvents.fetch_add(1, std::memory_order_relaxed);
 
-                // A button event is the anchor of the whole investigation, so make sure
-                // it survives a crash or a hard kill of the session.
                 if (cfg.flushOnButton && rmf::IsButtonEvent(raw.kind)) {
                     g_flushPending.store(true);
                 }
             }
-
             if (g_flushPending.exchange(false)) {
                 FlushLog();
             }
-
             if (!didWork) {
                 Sleep(4);
             }
         }
 
-        // Drain whatever is still queued at shutdown.
         while (queue.Pop(raw)) {
+            if (raw.kind == rmf::EventKind::Apply) {
+                LogLine(rmf::FormatApplyLine(raw, qpcFreq, qpcStart, wallStart));
+                continue;
+            }
             rmf::DecoratedEvent ev;
-            ev.raw = &raw;
-            ev.injected        = (raw.hookFlags & LLMHF_INJECTED) != 0;
-            ev.lowerIlInjected = (raw.hookFlags & LLMHF_LOWER_IL_INJECTED) != 0;
-            ev.processName     = names.NameForPid(raw.foregroundPid);
-            ev.dtMs            = -1;
+            decorate(raw, ev);
             LogLine(rmf::FormatEventLine(ev, qpcFreq, qpcStart, wallStart));
+            writtenEvents.fetch_add(1, std::memory_order_relaxed);
         }
         FlushLog();
     });
 
-    // ---- console status thread -----------------------------------------------------
+    auto modeLabel = [&]() -> const wchar_t* {
+        return correction.allowed ? rmf::CorrectionModeName(correction.Mode()) : L"locked";
+    };
+
+    // ---- console status thread ---------------------------------------------------------
     std::thread status;
     if (cfg.consoleStatusIntervalMs > 0) {
         status = std::thread([&] {
             while (g_running.load(std::memory_order_relaxed)) {
                 const bool inFg = targetInForeground.load();
-                ConsoleOut(L"\r  [%ls] events=%llu  injected=%llu  recenter=%llu  jump=%llu  dropped=%llu   ",
-                           filter.paused.load() ? L"PAUSED "
-                                                : (inFg ? L"ACTIVE " : L"idle   "),
-                           static_cast<unsigned long long>(writtenEvents.load()),
-                           static_cast<unsigned long long>(injectedCount.load()),
-                           static_cast<unsigned long long>(recenterCount.load()),
-                           static_cast<unsigned long long>(jumpCount.load()),
-                           static_cast<unsigned long long>(queue.Dropped()));
-                // Split sleep so shutdown stays responsive without a waitable timer.
+                ConsoleOut(L"\r  [%ls] corr=%-12ls ev=%llu inj=%llu drop=%llu apply=%llu anchor=%llu jump=%llu wd=%llu   ",
+                           filter.paused.load() ? L"PAUSED " : (inFg ? L"ACTIVE " : L"idle   "),
+                           modeLabel(), U(writtenEvents), U(injectedCount),
+                           U(correction.suppressed), U(correction.applied),
+                           U(anchorCount), U(jumpCount), U(correction.watchdogTrips));
                 for (unsigned slept = 0;
                      slept < cfg.consoleStatusIntervalMs && g_running.load(std::memory_order_relaxed);
                      slept += 50) {
@@ -499,10 +659,8 @@ int main() {
         });
     }
 
-    // ---- heartbeat -----------------------------------------------------------------
-    // An empty event section is ambiguous on its own: it can mean "nothing happened" or
-    // "the target name never matched". The heartbeat separates those two cases, which
-    // matters when the capture is taken by someone else on another machine.
+    // ---- heartbeat -----------------------------------------------------------------------
+    // Separates "nothing happened" from "the target never matched" in an empty log.
     std::thread heartbeat;
     if (cfg.heartbeatIntervalMs > 0) {
         heartbeat = std::thread([&] {
@@ -516,29 +674,23 @@ int main() {
                     break;
                 }
                 const rmf::StateSampler::Snapshot snap = sampler.Current();
-                const bool inFg = targetInForeground.load();
-                wchar_t buf[320];
-                swprintf(buf, 320,
-                         L"## HEARTBEAT target_foreground=%ls fg_pid=%lu events=%llu "
-                         L"injected=%llu recenter=%llu jump=%llu dropped=%llu "
-                         L"cursor=%ls clip=%ls",
-                         inFg ? L"yes" : L"no", snap.foregroundPid,
-                         static_cast<unsigned long long>(writtenEvents.load()),
-                         static_cast<unsigned long long>(injectedCount.load()),
-                         static_cast<unsigned long long>(recenterCount.load()),
-                         static_cast<unsigned long long>(jumpCount.load()),
-                         static_cast<unsigned long long>(queue.Dropped()),
-                         snap.cursorVisible ? L"shown" : L"HIDDEN",
-                         snap.clipIsFullScreen ? L"released" : L"CONFINED");
-                LogLine(buf);
+                LogLine(Format(
+                    L"## HEARTBEAT target_foreground=%ls fg_pid=%lu correction=%ls events=%llu "
+                    L"injected=%llu suppressed=%llu applied=%llu own=%llu anchor=%llu jump=%llu "
+                    L"output_failures=%llu watchdog=%llu dropped=%llu cursor=%ls clip=%ls",
+                    targetInForeground.load() ? L"yes" : L"no", snap.foregroundPid, modeLabel(),
+                    U(writtenEvents), U(injectedCount), U(correction.suppressed),
+                    U(correction.applied), U(correction.ownSeen), U(anchorCount), U(jumpCount),
+                    U(correction.outputFailures), U(correction.watchdogTrips),
+                    static_cast<unsigned long long>(queue.Dropped()),
+                    snap.cursorVisible ? L"shown" : L"HIDDEN",
+                    snap.clipIsFullScreen ? L"released" : L"CONFINED"));
                 FlushLog();
             }
         });
     }
 
-    // ---- auto-stop timer -----------------------------------------------------------
-    // Lets a test run be bounded from the command line, which is also how an unattended
-    // capture is taken: start it, do the test, let it close and hand over the log.
+    // ---- auto-stop timer -----------------------------------------------------------------
     std::thread timer;
     if (runSeconds > 0) {
         LogLine(L"# auto-stop after " + std::to_wstring(runSeconds) + L" seconds");
@@ -554,9 +706,9 @@ int main() {
         });
     }
 
-    // ---- message loop --------------------------------------------------------------
-    // WH_MOUSE_LL callbacks are delivered to this thread's message queue, so this loop
-    // is what actually drives the hook. It must stay responsive.
+    // ---- message loop --------------------------------------------------------------------
+    // WH_MOUSE_LL callbacks are delivered on this thread, so this loop drives the hook and
+    // must stay responsive. It also executes the correction output posted by the hook.
     unsigned markerCounter = 0;
     MSG msg {};
     while (g_running.load(std::memory_order_relaxed)) {
@@ -569,18 +721,74 @@ int main() {
             break;
         }
 
+        if (msg.message == kMsgApplyDelta) {
+            const rmf::CorrectionMode mode = correction.Mode();
+            if (mode == rmf::CorrectionMode::Off) {
+                continue; // switched off after the hook posted: drop quietly
+            }
+            const long dx = static_cast<long>(static_cast<LONG_PTR>(msg.wParam));
+            const long dy = static_cast<long>(static_cast<LONG_PTR>(msg.lParam));
+
+            POINT before {};
+            GetCursorPos(&before);
+            POINT target = before;
+            const bool  ok    = rmf::ApplyRemoteDelta(mode, dx, dy, target);
+            const DWORD error = ok ? 0 : GetLastError();
+            POINT after {};
+            GetCursorPos(&after);
+
+            // Trace record proving whether the output landed. Pushed from this thread, which
+            // is also the hook thread, so the queue keeps its single producer.
+            if (cfg.logMouseMoves && !filter.paused.load(std::memory_order_relaxed)) {
+                rmf::RawEvent record;
+                record.kind           = rmf::EventKind::Apply;
+                record.correctionMode = mode;
+                record.remoteDx       = dx;
+                record.remoteDy       = dy;
+                record.applyBefore    = before;
+                record.applyTarget    = target;
+                record.pt             = after;
+                record.applyOk        = ok;
+                record.applyError     = error;
+                LARGE_INTEGER qpc {};
+                QueryPerformanceCounter(&qpc);
+                record.qpcTicks = qpc.QuadPart;
+                queue.Push(record);
+            }
+
+            if (ok) {
+                correction.applied.fetch_add(1, std::memory_order_relaxed);
+                consecutiveOutputFailures = 0;
+                // Both modes use SendInput, so both must echo. Increment after sending: the
+                // echo can only be observed once this loop returns to GetMessage, so the
+                // counter never runs ahead.
+                const std::int64_t pending = correction.pendingEcho.fetch_add(1) + 1;
+                if (pending > static_cast<std::int64_t>(cfg.watchdogMaxUnechoed)) {
+                    tripWatchdog(Format(L"%lld own moves never reached the hook "
+                                        L"(input blocked, for example by UIPI)",
+                                        static_cast<long long>(pending)));
+                }
+            } else {
+                correction.outputFailures.fetch_add(1, std::memory_order_relaxed);
+                if (++consecutiveOutputFailures >= cfg.watchdogMaxOutputFailures) {
+                    tripWatchdog(Format(L"%u consecutive SendInput failures, last error %lu",
+                                        consecutiveOutputFailures, error));
+                    consecutiveOutputFailures = 0;
+                }
+            }
+            continue;
+        }
+
         if (msg.message == WM_HOTKEY) {
             switch (static_cast<int>(msg.wParam)) {
                 case kHotkeyMarker: {
                     ++markerCounter;
                     const rmf::StateSampler::Snapshot snap = sampler.Current();
-                    wchar_t buf[256];
-                    swprintf(buf, 256,
-                             L"## MARKER #%u at cursor=(%ld,%ld) cursor_visible=%ls clip=%ls",
-                             markerCounter, snap.cursorPos.x, snap.cursorPos.y,
-                             snap.cursorVisible ? L"yes" : L"no",
-                             snap.clipIsFullScreen ? L"released" : L"CONFINED");
-                    LogLine(buf);
+                    LogLine(Format(L"## MARKER #%u at cursor=(%ld,%ld) cursor_visible=%ls clip=%ls correction=%ls",
+                                   markerCounter, snap.cursorPos.x, snap.cursorPos.y,
+                                   snap.cursorVisible ? L"yes" : L"no",
+                                   snap.clipIsFullScreen ? L"released" : L"CONFINED",
+                                   modeLabel()));
                     FlushLog();
                     ConsoleOut(L"\n  marker #%u written\n", markerCounter);
                     break;
@@ -588,15 +796,24 @@ int main() {
                 case kHotkeyPause: {
                     const bool nowPaused = !filter.paused.load();
                     filter.paused.store(nowPaused);
-                    LogLine(nowPaused ? L"## CAPTURE PAUSED by operator"
+                    LogLine(nowPaused ? L"## CAPTURE PAUSED by operator (correction unaffected)"
                                       : L"## CAPTURE RESUMED by operator");
                     FlushLog();
-                    ConsoleOut(L"\n  capture %ls\n", nowPaused ? L"paused" : L"resumed");
+                    ConsoleOut(L"\n  logging %ls\n", nowPaused ? L"paused" : L"resumed");
                     break;
                 }
                 case kHotkeyQuit:
                     ConsoleOut(L"\n  quit requested\n");
                     g_running.store(false);
+                    break;
+                case kHotkeyCorrectionOff:
+                    switchMode(rmf::CorrectionMode::Off, L"hotkey");
+                    break;
+                case kHotkeyCorrectionAbsolute:
+                    switchMode(rmf::CorrectionMode::Absolute, L"hotkey");
+                    break;
+                case kHotkeyCorrectionRelative:
+                    switchMode(rmf::CorrectionMode::Relative, L"hotkey");
                     break;
                 default:
                     break;
@@ -608,62 +825,47 @@ int main() {
         DispatchMessageW(&msg);
     }
 
-    // ---- shutdown ------------------------------------------------------------------
+    // ---- shutdown ------------------------------------------------------------------------
     g_running.store(false);
+    correction.ForceOff();
 
-    UnregisterHotKey(nullptr, kHotkeyMarker);
-    UnregisterHotKey(nullptr, kHotkeyPause);
-    UnregisterHotKey(nullptr, kHotkeyQuit);
+    for (const auto& hotkey : kHotkeys) {
+        UnregisterHotKey(nullptr, hotkey.id);
+    }
 
     hook.Uninstall();
     sampler.Stop();
 
-    if (writer.joinable()) {
-        writer.join();
-    }
-    if (status.joinable()) {
-        status.join();
-    }
-    if (timer.joinable()) {
-        timer.join();
-    }
-    if (heartbeat.joinable()) {
-        heartbeat.join();
+    for (std::thread* worker : {&writer, &status, &timer, &heartbeat}) {
+        if (worker->joinable()) {
+            worker->join();
+        }
     }
 
     {
         std::vector<std::wstring> footer;
-        wchar_t buf[256];
         footer.push_back(L"#");
         footer.push_back(L"# --- session end " + NowStampReadable() + L" ---");
-        swprintf(buf, 256, L"# events logged  : %llu",
-                 static_cast<unsigned long long>(writtenEvents.load()));
-        footer.push_back(buf);
-        swprintf(buf, 256, L"# injected       : %llu",
-                 static_cast<unsigned long long>(injectedCount.load()));
-        footer.push_back(buf);
-        swprintf(buf, 256, L"# recenter tagged: %llu",
-                 static_cast<unsigned long long>(recenterCount.load()));
-        footer.push_back(buf);
-        swprintf(buf, 256, L"# jump tagged    : %llu",
-                 static_cast<unsigned long long>(jumpCount.load()));
-        footer.push_back(buf);
-        swprintf(buf, 256, L"# hook events seen: %llu (fast-path skipped %llu, queue drops %llu)",
-                 static_cast<unsigned long long>(rmf::MouseHook::TotalSeen()),
-                 static_cast<unsigned long long>(rmf::MouseHook::FastPathSkipped()),
-                 static_cast<unsigned long long>(queue.Dropped()));
-        footer.push_back(buf);
-        swprintf(buf, 256, L"# log rotations  : %u", logger.RotationCount());
-        footer.push_back(buf);
+        footer.push_back(Format(L"# events logged   : %llu", U(writtenEvents)));
+        footer.push_back(Format(L"# injected        : %llu", U(injectedCount)));
+        footer.push_back(Format(L"# at anchor       : %llu", U(anchorCount)));
+        footer.push_back(Format(L"# jump tagged     : %llu", U(jumpCount)));
+        footer.push_back(Format(L"# suppressed      : %llu", U(correction.suppressed)));
+        footer.push_back(Format(L"# applied         : %llu", U(correction.applied)));
+        footer.push_back(Format(L"# own seen        : %llu", U(correction.ownSeen)));
+        footer.push_back(Format(L"# output failures : %llu", U(correction.outputFailures)));
+        footer.push_back(Format(L"# watchdog trips  : %llu", U(correction.watchdogTrips)));
+        footer.push_back(Format(L"# hook events seen: %llu (outside target %llu, queue drops %llu)",
+                                static_cast<unsigned long long>(rmf::MouseHook::TotalSeen()),
+                                static_cast<unsigned long long>(rmf::MouseHook::FastPathSkipped()),
+                                static_cast<unsigned long long>(queue.Dropped())));
+        footer.push_back(Format(L"# log rotations   : %u", logger.RotationCount()));
         LogLines(footer);
     }
 
-    ConsoleOut(L"\n\n  stopped. %llu events logged (%llu injected, %llu recenter, %llu jump)\n",
-               static_cast<unsigned long long>(writtenEvents.load()),
-               static_cast<unsigned long long>(injectedCount.load()),
-               static_cast<unsigned long long>(recenterCount.load()),
-               static_cast<unsigned long long>(jumpCount.load()));
-
+    ConsoleOut(L"\n\n  stopped. %llu events logged, %llu suppressed, %llu applied, %llu watchdog trips\n",
+               U(writtenEvents), U(correction.suppressed), U(correction.applied),
+               U(correction.watchdogTrips));
     if (queue.Dropped() > 0) {
         ConsoleOut(L"  note: %llu events were dropped because the queue was full.\n",
                    static_cast<unsigned long long>(queue.Dropped()));

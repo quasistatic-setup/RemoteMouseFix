@@ -270,9 +270,25 @@ bool LoadConfig(const std::wstring& path, Config& cfg) {
         } else if (key == L"jump_threshold_px") {
             if (ParseInt(value, i) && i > 0) cfg.jumpThresholdPx = i;
             else cfg.warnings.push_back(L"jump_threshold_px must be > 0: " + value);
-        } else if (key == L"recenter_tolerance_px") {
-            if (ParseInt(value, i) && i >= 0) cfg.recenterTolerancePx = i;
-            else cfg.warnings.push_back(L"recenter_tolerance_px must be >= 0: " + value);
+        } else if (key == L"anchor_tolerance_px") {
+            if (ParseInt(value, i) && i >= 0) cfg.anchorTolerancePx = i;
+            else cfg.warnings.push_back(L"anchor_tolerance_px must be >= 0: " + value);
+        } else if (key == L"correction_mode") {
+            CorrectionMode mode = CorrectionMode::Off;
+            if (ParseCorrectionMode(value, mode)) cfg.correctionMode = mode;
+            else cfg.warnings.push_back(L"correction_mode must be off, absolute or relative: " + value);
+        } else if (key == L"watchdog_max_hidden_ms") {
+            if (ParseU64(value, u) && (u == 0 || (u >= 1000 && u <= 3600000)))
+                cfg.watchdogMaxHiddenMs = static_cast<unsigned>(u);
+            else cfg.warnings.push_back(L"watchdog_max_hidden_ms must be 0 or 1000..3600000: " + value);
+        } else if (key == L"watchdog_max_unechoed") {
+            if (ParseU64(value, u) && u >= 1 && u <= 100000)
+                cfg.watchdogMaxUnechoed = static_cast<unsigned>(u);
+            else cfg.warnings.push_back(L"watchdog_max_unechoed must be 1..100000: " + value);
+        } else if (key == L"watchdog_max_output_failures") {
+            if (ParseU64(value, u) && u >= 1 && u <= 1000)
+                cfg.watchdogMaxOutputFailures = static_cast<unsigned>(u);
+            else cfg.warnings.push_back(L"watchdog_max_output_failures must be 1..1000: " + value);
         } else if (key == L"state_poll_interval_ms") {
             if (ParseU64(value, u) && u >= 1 && u <= 1000) cfg.statePollIntervalMs = static_cast<unsigned>(u);
             else cfg.warnings.push_back(L"state_poll_interval_ms must be 1..1000: " + value);

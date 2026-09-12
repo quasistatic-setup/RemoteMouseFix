@@ -75,3 +75,4 @@ Zielprozess in `target_process` und `--seconds N`.
 | Logformat, Spalten, Leseverfahren für einen Klick ins 3D-Sichtfeld | [docs/diagnostics.md](docs/diagnostics.md) |
 | Build mit MSVC und Cross-Build, Konfigurationsschlüssel, Testablauf mit TeamViewer | [README.md](README.md) |
 | Fehlerbild, Arbeitshypothese und was Phase 1 belegen soll | [README.md](README.md) |
+| Messergebnis vom 12.09.2026, Ursachenkette und Randbedingungen für Phase 2 | [docs/findings-2026-09-12.md](docs/findings-2026-09-12.md) |

@@ -2,16 +2,19 @@
   "documents": [
     "AGENTS.md",
     "README.md",
-    "docs/diagnostics.md"
+    "docs/diagnostics.md",
+    "docs/findings-2026-09-12.md"
   ],
   "document_roots": [
     "docs"
   ],
   "generated": [],
   "canonical": [
-    "docs/diagnostics.md"
+    "docs/diagnostics.md",
+    "docs/findings-2026-09-12.md"
   ],
   "budgets": {
     "AGENTS.md": 12000
-  }
+  },
+  "historical": []
 }

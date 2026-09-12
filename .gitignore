@@ -1,0 +1,27 @@
+# Build output
+build/
+build-*/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# Captured logs are session data, never source
+logs/
+*.log
+
+# MSVC / Visual Studio
+.vs/
+*.vcxproj*
+*.sln
+*.user
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.idb
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~

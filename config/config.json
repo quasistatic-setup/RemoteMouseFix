@@ -1,0 +1,39 @@
+{
+  "_about": "RemoteMouseFix Phase 1 - diagnostics only. Keys starting with _ are comments.",
+
+  "_target_process": "Executable to observe, matched case-insensitively on the file name.",
+  "target_process": "Wow.exe",
+
+  "_diagnostic_mode": "Must be true in Phase 1. This build contains no filtering and no input synthesis.",
+  "diagnostic_mode": true,
+
+  "_log_mouse_moves": "false records buttons, wheel and state transitions only, which keeps logs small.",
+  "log_mouse_moves": true,
+
+  "_log_directory": "Relative paths resolve next to RemoteMouseFix.exe.",
+  "log_directory": "logs",
+  "log_file_prefix": "remotemousefix",
+
+  "_rotation": "Roll over past max_log_bytes and keep at most max_log_files files.",
+  "max_log_bytes": 8388608,
+  "max_log_files": 5,
+
+  "_flush_on_button": "Flush after every button event so a crash still keeps the interesting moment.",
+  "flush_on_button": true,
+
+  "_jump_threshold_px": "Tag a movement as JUMP once |dx| or |dy| reaches this many physical pixels.",
+  "jump_threshold_px": 40,
+
+  "_recenter_tolerance_px": "An injected move landing this close to the client centre is tagged RECENTER.",
+  "recenter_tolerance_px": 3,
+
+  "_state_poll_interval_ms": "Sampling period for cursor visibility and ClipCursor state.",
+  "state_poll_interval_ms": 10,
+  "log_state_changes": true,
+
+  "_console_status_interval_ms": "Live counter refresh in the console. 0 disables it.",
+  "console_status_interval_ms": 2000,
+
+  "_heartbeat_interval_ms": "Periodic liveness line in the log. Proves the tool was watching even when no event was recorded. 0 disables it.",
+  "heartbeat_interval_ms": 10000
+}

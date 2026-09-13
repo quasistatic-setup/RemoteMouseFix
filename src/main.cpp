@@ -73,6 +73,9 @@ constexpr HotkeySpec kHotkeys[] = {
 
 constexpr UINT kMsgQuitRequested = WM_APP + 1;
 constexpr UINT kMsgApplyDelta    = WM_APP + 2; // posted by the hook: wParam = dx, lParam = dy
+constexpr UINT_PTR kSmoothTimer  = 1;
+constexpr UINT kSmoothIntervalMs = 16;
+constexpr long kSmoothMaxStepPx  = 20;
 
 std::atomic<bool> g_running {true};
 DWORD             g_mainThreadId = 0;
@@ -244,6 +247,10 @@ int main() {
     rmf::Config cfg;
     rmf::LoadConfig(configPath, cfg);
 
+    SetConsoleTitleW(cfg.diagnosticMode
+                         ? L"RemoteMouseFix " RMF_VERSION_W L" - DIAGNOSTIC ONLY"
+                         : L"RemoteMouseFix " RMF_VERSION_W L" - A/B CORRECTION TEST");
+
     ConsoleOut(L"RemoteMouseFix %ls - diagnostics with optional correction\n", RMF_VERSION_W);
     ConsoleOut(L"----------------------------------------------------------\n");
     for (const auto& warning : cfg.warnings) {
@@ -321,6 +328,8 @@ int main() {
                                 cfg.watchdogMaxOutputFailures));
         header.push_back(Format(L"# thresholds     : jump>=%dpx  anchor<=%dpx  state_poll=%ums",
                                 cfg.jumpThresholdPx, cfg.anchorTolerancePx, cfg.statePollIntervalMs));
+        header.push_back(Format(L"# smoothing      : absolute only, interval=%ums max_step=%ldpx",
+                                kSmoothIntervalMs, kSmoothMaxStepPx));
         header.push_back(Format(L"# heartbeat      : every %u ms (0 = off)", cfg.heartbeatIntervalMs));
         header.push_back(Format(L"# rotation       : %llu bytes, keep %u files",
                                 static_cast<unsigned long long>(cfg.maxLogBytes), cfg.maxLogFiles));
@@ -360,11 +369,19 @@ int main() {
     }
 
     ConsoleOut(L"  target process : %ls\n", cfg.targetProcess.c_str());
+    ConsoleOut(L"  config file    : %ls\n",
+               cfg.loadedFrom.empty() ? L"<defaults>" : cfg.loadedFrom.c_str());
+    ConsoleOut(L"  run profile    : %ls\n",
+               cfg.diagnosticMode ? L"DIAGNOSTIC ONLY (correction cannot be enabled)"
+                                  : L"A/B CORRECTION TEST");
     ConsoleOut(L"  dpi awareness  : %ls\n", dpiMode.c_str());
     ConsoleOut(L"  log file       : %ls\n", logger.CurrentPath().c_str());
     ConsoleOut(L"  correction     : %ls\n",
                correction.allowed ? L"permitted (Ctrl+Alt+1 / Ctrl+Alt+2, Ctrl+Alt+C = off)"
                                   : (L"LOCKED OFF - " + lockReason).c_str());
+    if (cfg.diagnosticMode) {
+        ConsoleOut(L"  To test correction, close this window and run Start-AB-Test.cmd.\n");
+    }
     for (const auto& failed : failedHotkeys) {
         ConsoleOut(L"  HOTKEY FAILED  : %ls\n", failed.c_str());
     }
@@ -395,6 +412,7 @@ int main() {
     // ---- state sampler -----------------------------------------------------------------
     rmf::ProcessNameCache samplerNames(cfg.targetProcess);
     std::atomic<bool> targetInForeground {false};
+    std::atomic<bool> cursorHeldByTarget {false};
 
     // Sampler thread only.
     rmf::AnchorLearner anchorLearner;
@@ -402,6 +420,21 @@ int main() {
     RECT          holdPhaseClient  {0, 0, 0, 0};
     ULONGLONG     hiddenSince      = 0;
     std::uint32_t hiddenGeneration = 0;
+
+    auto publishAnchor = [&](POINT anchor, unsigned hits, unsigned total, RECT client) {
+        const long offsetX = anchor.x - client.left;
+        const long offsetY = anchor.y - client.top;
+        const bool changed = !filter.anchorValid.load() ||
+                             filter.anchorOffsetX.load() != offsetX ||
+                             filter.anchorOffsetY.load() != offsetY;
+        filter.anchorOffsetX.store(offsetX);
+        filter.anchorOffsetY.store(offsetY);
+        filter.anchorValid.store(true);
+        if (changed && cfg.logStateChanges) {
+            LogLine(Format(L"## STATE anchor-learned=(%ld,%ld) client_offset=(%ld,%ld) hits=%u/%u",
+                           anchor.x, anchor.y, offsetX, offsetY, hits, total));
+        }
+    };
 
     rmf::StateSampler sampler;
     sampler.Start(cfg.statePollIntervalMs,
@@ -432,6 +465,7 @@ int main() {
         },
         [&](const rmf::StateSampler::Snapshot& now) {
             const bool holding = targetInForeground.load() && !now.cursorVisible;
+            cursorHeldByTarget.store(holding, std::memory_order_relaxed);
 
             if (holding) {
                 const ULONGLONG tick = GetTickCount64();
@@ -445,6 +479,13 @@ int main() {
                 holdPhaseOpen   = true;
                 holdPhaseClient = now.clientScreenRect;
                 anchorLearner.Add(now.cursorPos);
+
+                POINT liveAnchor {};
+                unsigned liveHits = 0, liveTotal = 0;
+                if (!filter.anchorValid.load(std::memory_order_relaxed) &&
+                    anchorLearner.Estimate(liveAnchor, liveHits, liveTotal)) {
+                    publishAnchor(liveAnchor, liveHits, liveTotal, now.clientScreenRect);
+                }
 
                 if (cfg.watchdogMaxHiddenMs > 0 &&
                     correction.Mode() != rmf::CorrectionMode::Off &&
@@ -465,18 +506,7 @@ int main() {
             if (!anchorLearner.Finish(anchor, hits, total)) {
                 return;
             }
-            const long offsetX = anchor.x - holdPhaseClient.left;
-            const long offsetY = anchor.y - holdPhaseClient.top;
-            const bool changed = !filter.anchorValid.load() ||
-                                 filter.anchorOffsetX.load() != offsetX ||
-                                 filter.anchorOffsetY.load() != offsetY;
-            filter.anchorOffsetX.store(offsetX);
-            filter.anchorOffsetY.store(offsetY);
-            filter.anchorValid.store(true);
-            if (changed && cfg.logStateChanges) {
-                LogLine(Format(L"## STATE anchor-learned=(%ld,%ld) client_offset=(%ld,%ld) hits=%u/%u",
-                               anchor.x, anchor.y, offsetX, offsetY, hits, total));
-            }
+            publishAnchor(anchor, hits, total, holdPhaseClient);
         });
 
     // ---- mode switching (message-loop thread only) ------------------------------------
@@ -710,6 +740,58 @@ int main() {
     // WH_MOUSE_LL callbacks are delivered on this thread, so this loop drives the hook and
     // must stay responsive. It also executes the correction output posted by the hook.
     unsigned markerCounter = 0;
+    long long smoothPendingX = 0;
+    long long smoothPendingY = 0;
+
+    auto applyDelta = [&](rmf::CorrectionMode mode, long dx, long dy) {
+        POINT before {};
+        GetCursorPos(&before);
+        POINT target = before;
+        const bool  ok    = rmf::ApplyRemoteDelta(mode, dx, dy, target);
+        const DWORD error = ok ? 0 : GetLastError();
+        POINT after {};
+        GetCursorPos(&after);
+
+        if (cfg.logMouseMoves && !filter.paused.load(std::memory_order_relaxed)) {
+            rmf::RawEvent record;
+            record.kind           = rmf::EventKind::Apply;
+            record.correctionMode = mode;
+            record.remoteDx       = dx;
+            record.remoteDy       = dy;
+            record.applyBefore    = before;
+            record.applyTarget    = target;
+            record.pt             = after;
+            record.applyOk        = ok;
+            record.applyError     = error;
+            LARGE_INTEGER qpc {};
+            QueryPerformanceCounter(&qpc);
+            record.qpcTicks = qpc.QuadPart;
+            queue.Push(record);
+        }
+
+        if (ok) {
+            correction.applied.fetch_add(1, std::memory_order_relaxed);
+            consecutiveOutputFailures = 0;
+            const std::int64_t pending = correction.pendingEcho.fetch_add(1) + 1;
+            if (pending > static_cast<std::int64_t>(cfg.watchdogMaxUnechoed)) {
+                tripWatchdog(Format(L"%lld own moves never reached the hook "
+                                    L"(input blocked, for example by UIPI)",
+                                    static_cast<long long>(pending)));
+            }
+        } else {
+            correction.outputFailures.fetch_add(1, std::memory_order_relaxed);
+            if (++consecutiveOutputFailures >= cfg.watchdogMaxOutputFailures) {
+                tripWatchdog(Format(L"%u consecutive SendInput failures, last error %lu",
+                                    consecutiveOutputFailures, error));
+                consecutiveOutputFailures = 0;
+            }
+        }
+    };
+
+    const UINT_PTR smoothTimerId = SetTimer(nullptr, kSmoothTimer, kSmoothIntervalMs, nullptr);
+    if (smoothTimerId == 0) {
+        LogLine(L"# CONFIG WARNING : smoothing timer unavailable; absolute mode uses immediate output");
+    }
     MSG msg {};
     while (g_running.load(std::memory_order_relaxed)) {
         const BOOL got = GetMessageW(&msg, nullptr, 0, 0);
@@ -724,57 +806,72 @@ int main() {
         if (msg.message == kMsgApplyDelta) {
             const rmf::CorrectionMode mode = correction.Mode();
             if (mode == rmf::CorrectionMode::Off) {
+                smoothPendingX = 0;
+                smoothPendingY = 0;
                 continue; // switched off after the hook posted: drop quietly
             }
             const long dx = static_cast<long>(static_cast<LONG_PTR>(msg.wParam));
             const long dy = static_cast<long>(static_cast<LONG_PTR>(msg.lParam));
-
-            POINT before {};
-            GetCursorPos(&before);
-            POINT target = before;
-            const bool  ok    = rmf::ApplyRemoteDelta(mode, dx, dy, target);
-            const DWORD error = ok ? 0 : GetLastError();
-            POINT after {};
-            GetCursorPos(&after);
-
-            // Trace record proving whether the output landed. Pushed from this thread, which
-            // is also the hook thread, so the queue keeps its single producer.
-            if (cfg.logMouseMoves && !filter.paused.load(std::memory_order_relaxed)) {
-                rmf::RawEvent record;
-                record.kind           = rmf::EventKind::Apply;
-                record.correctionMode = mode;
-                record.remoteDx       = dx;
-                record.remoteDy       = dy;
-                record.applyBefore    = before;
-                record.applyTarget    = target;
-                record.pt             = after;
-                record.applyOk        = ok;
-                record.applyError     = error;
-                LARGE_INTEGER qpc {};
-                QueryPerformanceCounter(&qpc);
-                record.qpcTicks = qpc.QuadPart;
-                queue.Push(record);
-            }
-
-            if (ok) {
-                correction.applied.fetch_add(1, std::memory_order_relaxed);
-                consecutiveOutputFailures = 0;
-                // Both modes use SendInput, so both must echo. Increment after sending: the
-                // echo can only be observed once this loop returns to GetMessage, so the
-                // counter never runs ahead.
-                const std::int64_t pending = correction.pendingEcho.fetch_add(1) + 1;
-                if (pending > static_cast<std::int64_t>(cfg.watchdogMaxUnechoed)) {
-                    tripWatchdog(Format(L"%lld own moves never reached the hook "
-                                        L"(input blocked, for example by UIPI)",
-                                        static_cast<long long>(pending)));
-                }
+            if (mode == rmf::CorrectionMode::Absolute && smoothTimerId != 0) {
+                auto retargetAxis = [&](long long& pending, long incoming, wchar_t axis) {
+                    constexpr long kRetargetMinPx = 5;
+                    const bool reversed =
+                        (pending > kSmoothMaxStepPx && incoming <= -kRetargetMinPx) ||
+                        (pending < -kSmoothMaxStepPx && incoming >= kRetargetMinPx);
+                    if (!reversed) {
+                        return;
+                    }
+                    LogLine(Format(L"## SMOOTH RETARGET axis=%lc discarded=%+lld incoming=%+ld",
+                                   axis, pending, incoming));
+                    pending = 0;
+                };
+                retargetAxis(smoothPendingX, dx, L'x');
+                retargetAxis(smoothPendingY, dy, L'y');
+                smoothPendingX += dx;
+                smoothPendingY += dy;
             } else {
-                correction.outputFailures.fetch_add(1, std::memory_order_relaxed);
-                if (++consecutiveOutputFailures >= cfg.watchdogMaxOutputFailures) {
-                    tripWatchdog(Format(L"%u consecutive SendInput failures, last error %lu",
-                                        consecutiveOutputFailures, error));
-                    consecutiveOutputFailures = 0;
-                }
+                applyDelta(mode, dx, dy);
+            }
+            continue;
+        }
+
+        if (msg.message == WM_TIMER && msg.wParam == smoothTimerId) {
+            if (correction.Mode() != rmf::CorrectionMode::Absolute ||
+                !cursorHeldByTarget.load(std::memory_order_relaxed)) {
+                smoothPendingX = 0;
+                smoothPendingY = 0;
+                continue;
+            }
+            // Never stack a new step on top of one the game has not consumed yet. Doing
+            // so makes current+delta accumulate before the next game frame and amplifies
+            // camera motion. The learned anchor is the proof that the previous step was
+            // read and the game warped back.
+            if (!filter.anchorValid.load(std::memory_order_relaxed)) {
+                continue;
+            }
+            const rmf::StateSampler::Snapshot snap = sampler.Current();
+            POINT current {};
+            if (!GetCursorPos(&current)) {
+                continue;
+            }
+            const long anchorX = snap.clientScreenRect.left +
+                                 filter.anchorOffsetX.load(std::memory_order_relaxed);
+            const long anchorY = snap.clientScreenRect.top +
+                                 filter.anchorOffsetY.load(std::memory_order_relaxed);
+            if (std::abs(current.x - anchorX) > cfg.anchorTolerancePx ||
+                std::abs(current.y - anchorY) > cfg.anchorTolerancePx) {
+                continue;
+            }
+            const long dx = static_cast<long>(std::clamp(
+                smoothPendingX, -static_cast<long long>(kSmoothMaxStepPx),
+                static_cast<long long>(kSmoothMaxStepPx)));
+            const long dy = static_cast<long>(std::clamp(
+                smoothPendingY, -static_cast<long long>(kSmoothMaxStepPx),
+                static_cast<long long>(kSmoothMaxStepPx)));
+            if (dx != 0 || dy != 0) {
+                smoothPendingX -= dx;
+                smoothPendingY -= dy;
+                applyDelta(rmf::CorrectionMode::Absolute, dx, dy);
             }
             continue;
         }
@@ -826,6 +923,9 @@ int main() {
     }
 
     // ---- shutdown ------------------------------------------------------------------------
+    if (smoothTimerId != 0) {
+        KillTimer(nullptr, smoothTimerId);
+    }
     g_running.store(false);
     correction.ForceOff();
 

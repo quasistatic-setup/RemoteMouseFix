@@ -114,7 +114,7 @@ void AnchorLearner::Add(POINT screenPos) {
     ++total_;
 }
 
-bool AnchorLearner::Finish(POINT& outPos, unsigned& outHits, unsigned& outTotal) {
+bool AnchorLearner::Estimate(POINT& outPos, unsigned& outHits, unsigned& outTotal) const {
     unsigned bestHits = 0;
     std::pair<long, long> best {0, 0};
     for (const auto& [pos, hits] : counts_) {
@@ -133,6 +133,11 @@ bool AnchorLearner::Finish(POINT& outPos, unsigned& outHits, unsigned& outTotal)
         outPos.y = best.second;
     }
 
+    return dominant;
+}
+
+bool AnchorLearner::Finish(POINT& outPos, unsigned& outHits, unsigned& outTotal) {
+    const bool dominant = Estimate(outPos, outHits, outTotal);
     counts_.clear();
     total_ = 0;
     return dominant;

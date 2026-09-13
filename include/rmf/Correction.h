@@ -80,6 +80,10 @@ class AnchorLearner {
 public:
     void Add(POINT screenPos);
 
+    // Returns the currently dominant position without ending the phase. This lets the
+    // correction become usable during the first hold instead of waiting for release.
+    bool Estimate(POINT& outPos, unsigned& outHits, unsigned& outTotal) const;
+
     // Evaluates and clears the collected phase. True when one position clearly dominates:
     // at least kMinSamples hits and kMinSharePercent of all samples.
     bool Finish(POINT& outPos, unsigned& outHits, unsigned& outTotal);

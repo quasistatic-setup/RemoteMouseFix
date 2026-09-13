@@ -51,8 +51,9 @@ dropped: it lost about 40% of the movement, because `SetCursorPos` races with th
 thread that is still finishing the withheld event. `SendInput` is queued behind it and
 processed in order.
 
-The 500 ms pauses of the remote transport are not corrected. A large catch-up delta is real
-movement that arrived late; the tool passes it on unchanged.
+The tool cannot reconstruct movement that TeamViewer has not delivered during a transport
+pause. In `absolute` mode it spreads a late catch-up delta across bounded steps, which
+keeps the camera moving but can add a small amount of latency.
 
 ### Safety
 
@@ -157,6 +158,15 @@ RemoteMouseFix.exe [path\to\config.json] [--seconds N]
 | `Ctrl+Alt+1` | correction `absolute` |
 | `Ctrl+Alt+2` | correction `relative` |
 
+`absolute` smooths batched TeamViewer movement only while the game cursor is hidden. It
+emits at most 20 pixels per axis every 16 ms. Pending movement is discarded on release,
+focus loss or correction shutdown. When new remote movement reverses an axis, stale
+movement still queued on that axis is discarded so the camera follows the new direction
+without elastic pullback. `relative` remains unsmoothed for direct comparison.
+Opposing deltas below 5 pixels are treated as remote-input noise rather than a direction
+change. The warp anchor becomes available as soon as five stable samples establish it,
+including during the first camera hold.
+
 Log files rotate and are pruned by prefix, so copy a log you want to keep out of `logs\`
 before taking further captures.
 
@@ -164,12 +174,13 @@ before taking further captures.
 
 Do this from the remote side, over TeamViewer, exactly as when the problem occurs.
 
-1. Put `RemoteMouseFix.exe` and `config-ab-test.json` into one folder on the game machine.
+1. Put `RemoteMouseFix.exe`, `config-ab-test.json` and `Start-AB-Test.cmd` into one folder
+   on the game machine.
 2. Start WoW and park a character in a quiet spot.
-3. Start `RemoteMouseFix.exe config-ab-test.json`. The console must show
-   `correction: permitted`. Click into WoW; the status must switch to `ACTIVE` with
-   `corr=off`.
-4. Run the same three steps once per mode, in the order `off`, `absolute`, `relative`.
+3. Start `Start-AB-Test.cmd`. The console must show `run profile: A/B CORRECTION TEST`,
+   the path to `config-ab-test.json`, and `correction: absolute`. Click into WoW; the
+   status must switch to `ACTIVE` with `corr=absolute`.
+4. Run the same three steps once per mode, in the order `absolute`, `off`, `relative`.
    Switch with the hotkey first (`Ctrl+Alt+C`, `Ctrl+Alt+1`, `Ctrl+Alt+2`); the console
    confirms each switch.
    - `Ctrl+Alt+M`, then one click into the **3D view** without moving the mouse.
@@ -218,7 +229,10 @@ RemoteMouseFix/
     toolchain-mingw-w64-x64.cmake    cross-compile toolchain
   config/
     config.json                      observe only (diagnostic_mode = true)
-    config-ab-test.json              correction permitted, starts off
+    config-ab-test.json              absolute correction, full diagnostic logging
+    Start-AB-Test.cmd                unambiguous launcher for the correction A/B test
+    config-play.json                 absolute correction, compact gameplay logging
+    Start-Playing.cmd                launcher for normal corrected gameplay
   docs/
     diagnostics.md                   log format and reading procedures
     findings-2026-09-12.md           dated measurement report

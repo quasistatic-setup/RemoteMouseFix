@@ -1,5 +1,5 @@
 {
-  "_about": "RemoteMouseFix A/B test configuration: correction permitted, starts off, switched by hotkey. Keys starting with _ are comments.",
+  "_about": "RemoteMouseFix A/B test configuration: absolute correction starts immediately and can be switched by hotkey. Keys starting with _ are comments.",
 
   "_target_process": "Executable to observe, matched case-insensitively on the file name.",
   "target_process": "Wow.exe",
@@ -10,8 +10,8 @@
   "_log_mouse_moves": "false records buttons, wheel and state transitions only, which keeps logs small.",
   "log_mouse_moves": true,
 
-  "_correction_mode": "Starts off on purpose. Switch while running: Ctrl+Alt+1 absolute, Ctrl+Alt+2 relative, Ctrl+Alt+C off.",
-  "correction_mode": "off",
+  "_correction_mode": "Starts in absolute. Switch while running: Ctrl+Alt+1 absolute, Ctrl+Alt+2 relative, Ctrl+Alt+C off.",
+  "correction_mode": "absolute",
 
   "_watchdogs": "Switch the correction off automatically. max_hidden_ms 0 disables that one check.",
   "watchdog_max_hidden_ms": 180000,

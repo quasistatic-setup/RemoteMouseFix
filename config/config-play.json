@@ -1,0 +1,25 @@
+{
+  "_about": "RemoteMouseFix gameplay configuration: absolute correction starts immediately. Keys starting with _ are comments.",
+
+  "target_process": "Wow.exe",
+  "diagnostic_mode": false,
+  "log_mouse_moves": false,
+  "correction_mode": "absolute",
+
+  "watchdog_max_hidden_ms": 180000,
+  "watchdog_max_unechoed": 50,
+  "watchdog_max_output_failures": 5,
+
+  "log_directory": "logs",
+  "log_file_prefix": "remotemousefix",
+  "max_log_bytes": 8388608,
+  "max_log_files": 5,
+  "flush_on_button": true,
+
+  "jump_threshold_px": 40,
+  "anchor_tolerance_px": 3,
+  "state_poll_interval_ms": 10,
+  "log_state_changes": true,
+  "console_status_interval_ms": 2000,
+  "heartbeat_interval_ms": 10000
+}

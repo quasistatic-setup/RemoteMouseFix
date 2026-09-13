@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(RemoteMouseFix
-    VERSION 0.2.0
+    VERSION 0.6.0
     DESCRIPTION "Diagnostics and guarded correction for mouse/camera jumps in 3D games over remote desktop software"
     LANGUAGES CXX)
 
@@ -76,6 +76,9 @@ add_custom_command(TARGET RemoteMouseFix POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/config/config.json"
             "${CMAKE_SOURCE_DIR}/config/config-ab-test.json"
+            "${CMAKE_SOURCE_DIR}/config/config-play.json"
+            "${CMAKE_SOURCE_DIR}/config/Start-AB-Test.cmd"
+            "${CMAKE_SOURCE_DIR}/config/Start-Playing.cmd"
             "$<TARGET_FILE_DIR:RemoteMouseFix>"
     COMMENT "Copying config files next to RemoteMouseFix.exe")
 
@@ -89,5 +92,12 @@ if(RMF_BUILD_PROBE)
 endif()
 
 install(TARGETS RemoteMouseFix RUNTIME DESTINATION .)
-install(FILES config/config.json config/config-ab-test.json README.md LICENSE DESTINATION .)
+install(FILES
+    config/config.json
+    config/config-ab-test.json
+    config/config-play.json
+    config/Start-AB-Test.cmd
+    config/Start-Playing.cmd
+    README.md LICENSE
+    DESTINATION .)
 install(FILES docs/diagnostics.md DESTINATION docs)

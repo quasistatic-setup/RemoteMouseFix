@@ -21,13 +21,14 @@ Every timestamp in the file is **local time**, the same zone as the Windows cloc
 # os             : Windows 10.0 build 26200
 # dpi awareness  : per-monitor-v2
 # elevated       : no
-# config file    : C:\Users\you\RemoteMouseFix\config-ab-test.json
+# config file    : C:\WOW\RemoteMouseFix\config-ab-test.json
 # target process : Wow.exe
 # log mouse moves: yes
 # diagnostic mode: no
-# correction     : permitted, start=off
+# correction     : permitted, start=absolute
 # watchdog       : max_hidden=180000ms max_unechoed=50 max_output_failures=5
 # thresholds     : jump>=40px  anchor<=3px  state_poll=10ms
+# smoothing      : absolute only, interval=16ms max_step=20px
 # heartbeat      : every 10000 ms (0 = off)
 # rotation       : 8388608 bytes, keep 5 files
 # virtual screen : 1920x1200 at (0,0), monitors=1
@@ -111,7 +112,8 @@ events, which is why it is polled:
 ```
 
 One line per correction output, written by the message loop right after the `SendInput`
-call. `before` and `after` are cursor positions read around the call; `after` usually still
+call. In `absolute` mode, `rd=` is one smoothed output step; the corresponding `DROP`
+lines retain the original TeamViewer deltas. `before` and `after` are cursor positions read around the call; `after` usually still
 equals `before`, because the input thread processes the event slightly later. `target` is
 the intended landing position in `absolute` mode. `FAILED error=N` replaces `ok` when the
 call failed. `qpc_ms` is the machine-wide QueryPerformanceCounter in milliseconds, so the
@@ -128,6 +130,11 @@ line can be aligned exactly with another process's trace, such as `MouseLookProb
 ```
 
 `source` is `config` (startup mode) or `hotkey`. Every watchdog trip names its reason:
+
+`## SMOOTH RETARGET axis=x discarded=+120 incoming=-8` records that `absolute`
+smoothing detected a direction reversal. The stale queued movement on that axis was
+discarded so output could follow the new direction immediately. Opposing movement below
+5 pixels is ignored for retargeting because the 0.5 trace showed one-pixel remote noise.
 
 | Reason | Meaning |
 | --- | --- |

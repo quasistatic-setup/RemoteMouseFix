@@ -251,6 +251,7 @@ RemoteMouseFix/
 If RemoteMouseFix helps you and you want to support its development:
 
 - Buy Me a Coffee: https://buymeacoffee.com/quasistatic
+- Ko-fi: https://ko-fi.com/quasistatic
 
 ## License
 

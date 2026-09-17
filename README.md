@@ -1,5 +1,7 @@
 # RemoteMouseFix
 
+[![Build](https://github.com/quasistatic-setup/RemoteMouseFix/actions/workflows/build.yml/badge.svg)](https://github.com/quasistatic-setup/RemoteMouseFix/actions/workflows/build.yml)
+
 RemoteMouseFix is a portable Windows tool for mouse and camera jumps in 3D games used
 through remote-control software. It was created for **TeamViewer and World of Warcraft
 3.3.5a**, where a click into the 3D view can make the camera jump and remote camera turns
@@ -276,6 +278,15 @@ RemoteMouseFix/
   src/                          application implementation
   tools/probe/                  stand-in game and remote-input emulator
 ```
+
+## Contributing
+
+Reports from other setups are the most useful contribution, see
+[Report a problem or test another setup](#report-a-problem-or-test-another-setup).
+[CONTRIBUTING.md](CONTRIBUTING.md) describes the build, the test requirements and the
+safety rules every change has to respect. Security problems go through
+[SECURITY.md](SECURITY.md), not through a public issue. Released changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Support
 

@@ -35,6 +35,27 @@ mouse button is held while the pointer moves slowly left and right.
 The gameplay profile targets `Wow.exe` and enables the recommended `absolute` correction
 immediately. It keeps compact diagnostic logs in the `logs` folder beside the program.
 
+### Windows warnings on first start
+
+The release EXE is not code-signed, and RemoteMouseFix installs a low-level mouse hook and
+sends synthetic mouse input. Both are normal for this kind of tool and both are things
+security software watches for, so expect warnings:
+
+- **SmartScreen** may show "Windows protected your PC". Choose **More info**, then
+  **Run anyway**, after you have checked the download as described below.
+- **Antivirus software** may flag the EXE heuristically. If yours quarantines it, report a
+  false positive to your vendor rather than disabling protection.
+
+Every release lists the SHA-256 checksum of its ZIP. Verify it before extracting:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\RemoteMouseFix-vX.Y.Z-win-x64.zip
+```
+
+If the value does not match the release notes, do not run the program. The full source is
+in this repository and can be built yourself, see
+[Build from source](#build-from-source).
+
 ### Controls
 
 | Hotkey | Effect |
@@ -262,6 +283,13 @@ If RemoteMouseFix helps you and you want to support its development:
 
 - Buy Me a Coffee: https://buymeacoffee.com/quasistatic
 - Ko-fi: https://ko-fi.com/quasistatic
+
+## Trademarks
+
+RemoteMouseFix is an independent project and is not affiliated with, endorsed by or
+sponsored by Blizzard Entertainment or TeamViewer. World of Warcraft, TeamViewer and all
+other product names are trademarks of their respective owners and are used here only to
+describe the setups that were measured.
 
 ## License
 

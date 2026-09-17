@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and attach the ZIP to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Windows x64 package
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve the tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { '${{ inputs.tag }}' }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Check that the tag matches the project version
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.tag.outputs.tag }}'
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)' |
+                      Select-Object -First 1).Matches[0].Groups[1].Value
+          if ("v$version" -ne $tag) {
+            throw "Tag $tag does not match the project version $version in CMakeLists.txt"
+          }
+          Write-Host "Building $tag from project version $version"
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_CXX_FLAGS="/WX"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.tag.outputs.tag }}'
+          $name = "RemoteMouseFix-$tag-win-x64"
+          cmake --install build --config Release --prefix "stage/$name"
+          Compress-Archive -Path "stage/$name" -DestinationPath "$name.zip" -CompressionLevel Optimal
+          $hash = (Get-FileHash -Algorithm SHA256 "$name.zip").Hash.ToLower()
+          "$hash  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
+          "zip=$name.zip" >> $env:GITHUB_OUTPUT
+          "sha=$hash" >> $env:GITHUB_OUTPUT
+          "## $name`n`nSHA-256 ``$hash``" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Publish the release assets
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.tag.outputs.tag }}'
+          $zip = '${{ steps.package.outputs.zip }}'
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip "$zip.sha256" --clobber
+          } else {
+            gh release create $tag $zip "$zip.sha256" `
+              --title "RemoteMouseFix $tag" --generate-notes --latest
+            gh release view $tag --json body --jq .body | Out-File -Encoding utf8 body.md
+            "`n## Verify the download`n`n``````" | Out-File -Append -Encoding utf8 body.md
+            "SHA-256  ${{ steps.package.outputs.sha }}" | Out-File -Append -Encoding utf8 body.md
+            "``````" | Out-File -Append -Encoding utf8 body.md
+            gh release edit $tag --notes-file body.md
+          }

@@ -1,0 +1,31 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  msvc:
+    name: MSVC x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        # /WX makes the documented "compiles without warnings" rule a hard gate in CI.
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_CXX_FLAGS="/WX"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Stage the release layout
+        run: cmake --install build --config Release --prefix stage/RemoteMouseFix-win-x64
+
+      - name: Upload the build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteMouseFix-win-x64
+          path: stage/RemoteMouseFix-win-x64
+          if-no-files-found: error

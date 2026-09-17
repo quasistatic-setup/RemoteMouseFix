@@ -1,0 +1,82 @@
+name: Problem or test report
+description: Report a problem, or share how RemoteMouseFix behaved in another setup
+labels: ["report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please run the A/B profile first (`Start-AB-Test.cmd`) and follow the steps in
+        [Report a problem or test another setup](../blob/main/README.md#report-a-problem-or-test-another-setup).
+
+        Review your log before attaching it. Logs contain mouse positions, timing, window
+        geometry, process names and numeric identifiers. Never include account details,
+        chat content or unrelated screenshots.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what the camera actually did.
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game and version
+      placeholder: World of Warcraft 3.3.5a
+    validations:
+      required: true
+  - type: input
+    id: remote
+    attributes:
+      label: Remote-control application and version
+      placeholder: TeamViewer 15.x
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2, build 26100
+    validations:
+      required: true
+  - type: input
+    id: display
+    attributes:
+      label: Display resolution and scaling
+      placeholder: 1920x1200, 125 percent
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RemoteMouseFix version
+      description: The version the console prints at startup, or the release you downloaded.
+    validations:
+      required: true
+  - type: textarea
+    id: modes
+    attributes:
+      label: Observation per correction mode
+      description: Describe `absolute`, `off` and `relative` separately. Smooth, jumping, too fast or too slow?
+      value: |
+        absolute:
+        off:
+        relative:
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        Attach the ZIPped log from the `logs` folder by dragging it into this field, and paste
+        the final lines that report `queue drops` and `watchdog trips`.
+  - type: checkboxes
+    id: conditions
+    attributes:
+      label: Conditions
+      options:
+        - label: Neither the game nor RemoteMouseFix was started as administrator.
+          required: true
+        - label: I reviewed the log and it contains nothing I want to keep private.
+          required: false

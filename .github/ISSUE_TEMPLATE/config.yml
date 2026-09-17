@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Read the README first
+    url: https://github.com/quasistatic-setup/RemoteMouseFix#does-it-apply-to-my-setup
+    about: Check whether your setup matches the measured case before filing a report.

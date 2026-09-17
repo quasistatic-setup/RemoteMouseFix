@@ -7,6 +7,11 @@ correction is still experimental.
 
 ## [Unreleased]
 
+### Fixed
+
+- `MouseLookProbe` opens its log through `_wfopen_s` under MSVC, so the build stays free of
+  warnings with `/W4 /WX`.
+
 ## [0.6.0] - 2026-09-17
 
 First public release.

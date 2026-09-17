@@ -13,6 +13,16 @@ driver, require administrator rights, access the network, or write to the regist
 > TeamViewer with WoW 3.3.5a. Other games and remote-control applications may behave
 > differently.
 
+## What the correction changes
+
+Both recordings show the same camera turn in WoW 3.3.5a through TeamViewer: the right
+mouse button is held while the pointer moves slowly left and right.
+
+| Correction `off` | Correction `absolute` |
+| --- | --- |
+| <img src="docs/media/correction-off.gif" alt="Camera jumping while the correction is off" width="400"> | <img src="docs/media/correction-on.gif" alt="Camera turning smoothly with the absolute correction" width="400"> |
+| The injected absolute pointer overwrites the game's cursor warp, so the camera jumps and overshoots. | The warp stays intact and the remote pointer movement reaches the game as a smooth turn. |
+
 ## Download and quick start
 
 1. Open the [latest release](https://github.com/quasistatic-setup/RemoteMouseFix/releases/latest)

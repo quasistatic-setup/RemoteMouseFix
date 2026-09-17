@@ -1,89 +1,82 @@
-# RemoteMouseFix: Projektregeln
+# RemoteMouseFix: project rules
 
-Globale Regeln in `~/AGENTS.md` gelten zusätzlich und haben bei Git, Geheimnissen und
-Dokumentationsform Vorrang vor Gewohnheiten. Diese Datei beschreibt nur, was für dieses
-Repository eigen ist.
+This file describes what is specific to this repository. Any machine-wide or personal
+agent rules apply in addition and take precedence on Git, secrets and documentation form.
 
-## Projektgrenzen
+## Project boundaries
 
-Portables Windows-Werkzeug gegen fehlerhafte Maus- und Kamerasprünge in 3D-Spielen über
-Fernwartungssoftware. Erster Fall: TeamViewer mit WoW 3.3.5a.
+A portable Windows tool against faulty mouse and camera jumps in 3D games used through
+remote-control software. First case: TeamViewer with WoW 3.3.5a.
 
-Technisch festgelegt und nicht ohne ausdrücklichen Auftrag zu ändern:
-C++17, Win32-API, CMake, Windows 10/11, zunächst x64.
+Technically fixed and not to be changed without an explicit request:
+C++17, Win32 API, CMake, Windows 10/11, x64 for now.
 
-Das Repository enthält ausschließlich Quellcode, Konfigurationsvorlagen, das Testziel
-`tools/probe` und Dokumentation. Aufgezeichnete Logs sind Sitzungsdaten und gehören nie
-in Git.
+The repository contains source code, configuration templates, the test target
+`tools/probe` and documentation only. Recorded logs are session data and never belong in
+Git.
 
-## Übergreifende Schutzregeln
+## Overarching safety rules
 
-In jedem Modus, ohne Ausnahme:
+In every mode, without exception:
 
-- Keine DLL-Injection, kein Treiber, kein Code im Spielprozess.
-- Kein `ClipCursor`, keine Änderung am Spiel oder seinen Dateien.
-- Kein Tastaturhook. Hotkeys nutzen `RegisterHotKey` und sehen nur genau diese
-  Kombinationen. Tastenanschläge und Textinhalte sind technisch nicht erfassbar.
-- Kein Netzwerkzugriff, keine Adminrechte, kein Installer, keine Registry-Schreibzugriffe.
-- Wirkung nur während der Laufzeit, kein Rückstand nach dem Beenden.
-- Protokolliert wird ausschließlich für den Zielprozess. Ausnahme sind Fokuswechsel mit
-  Fenstergriff, PID und Prozessname, aber ohne Eingaben fremder Anwendungen.
+- No DLL injection, no driver, no code inside the game process.
+- No `ClipCursor`, no change to the game or its files.
+- No keyboard hook. Hotkeys use `RegisterHotKey` and see exactly those combinations.
+  Keystrokes and text content are technically not observable.
+- No network access, no administrator rights, no installer, no registry writes.
+- Effect only while running, nothing left behind after it exits.
+- Logging is limited to the target process. The exception is focus changes with window
+  handle, PID and process name, but without input from other applications.
 
-Mit `diagnostic_mode = true` wird keine Eingabe verändert und kein Korrekturmodus lässt
-sich einschalten. Das ist der Standard der ausgelieferten `config.json`.
+With `diagnostic_mode = true` no input is modified and no correction mode can be enabled.
+That is the default of the shipped `config.json`.
 
-Eingriffe in Eingaben sind nur unter allen folgenden Bedingungen zulässig. Jede
-Erweiterung darüber hinaus braucht zuerst einen ausgewerteten Log, der sie begründet:
+Interfering with input is permitted only under all of the following conditions. Any
+extension beyond them needs an evaluated log that justifies it first:
 
-- `diagnostic_mode = false` und ein Korrekturmodus ist aktiv. Der Startmodus ist
-  standardmäßig `off`.
-- Zurückgehalten werden ausschließlich injizierte `WM_MOUSEMOVE` ohne die eigene
-  Signatur in `dwExtraInfo`, und nur solange der Zielprozess im Vordergrund ist und der
-  Cursor versteckt ist.
-- Tasten, Mausrad und physische Eingaben werden nie zurückgehalten oder verändert.
-- Eigene synthetische Eingaben tragen immer die Signatur und werden nie erneut verarbeitet.
-- Der Not-Aus-Hotkey `Ctrl+Alt+C` muss registriert sein, sonst bleibt die Korrektur
-  gesperrt. Der Nutzer steuert den Rechner womöglich selbst über die Fernwartung und darf
-  die Kontrolle über den Zeiger nie verlieren.
-- Watchdogs schalten die Korrektur bei Auffälligkeiten ab und schreiben den Grund ins Log:
-  zu lange versteckter Cursor, fehlgeschlagene Ausgaben, nicht zurückkommende eigene
-  Eingaben.
+- `diagnostic_mode = false` and a correction mode is active. The startup mode defaults to
+  `off`.
+- Only injected `WM_MOUSEMOVE` without our own signature in `dwExtraInfo` are withheld,
+  and only while the target process is in the foreground and the cursor is hidden.
+- Keys, the wheel and physical input are never withheld or modified.
+- Our own synthetic input always carries the signature and is never processed again.
+- The emergency-off hotkey `Ctrl+Alt+C` must be registered, otherwise correction stays
+  locked. The user may be controlling the machine through remote software and must never
+  lose control of the pointer.
+- Watchdogs disable the correction on anomalies and write the reason to the log: a cursor
+  hidden for too long, failed output, own input that does not come back.
 
-## Nicht verhandelbare Implementierungsgrenzen
+## Non-negotiable implementation limits
 
-- Der Hook-Callback darf nichts Blockierendes tun. Windows entfernt einen
-  Low-Level-Hook nach `LowLevelHooksTimeout` stillschweigend. Datei-Ein-/Ausgabe, Sperren
-  und die Korrekturausgabe gehören nicht in den Callback; die Ausgabe wird an die
-  Nachrichtenschleife gepostet.
-- Die Ringpuffer-Kopplung ist ein einzelner Produzent und ein einzelner Konsument.
-- DPI-Awareness ist eine Korrektheitsbedingung. Hook und `SetCursorPos` arbeiten in
-  physischen Pixeln.
-- Der Warp-Anker des Spiels wird aus den Daten gelernt, nie als Client-Mitte angenommen.
-- Keine externen Abhängigkeiten. Jede EXE bleibt statisch gelinkt.
+- The hook callback must not do anything blocking. Windows silently removes a low-level
+  hook after `LowLevelHooksTimeout`. File I/O, locks and the correction output do not
+  belong in the callback; the output is posted to the message loop.
+- The ring-buffer coupling is a single producer and a single consumer.
+- DPI awareness is a correctness condition. The hook and `SetCursorPos` work in physical
+  pixels.
+- The game's warp anchor is learned from the data, never assumed to be the client centre.
+- No external dependencies. Every EXE stays statically linked.
 
-## Prüf-Einstiege
+## Verification entry points
 
 ```bash
-# Cross-Build aus WSL, erzeugt RemoteMouseFix.exe und MouseLookProbe.exe
+# Cross-build from WSL, produces RemoteMouseFix.exe and MouseLookProbe.exe
 cmake -S . -B build-mingw -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw-w64-x64.cmake
 cmake --build build-mingw -j
-
-# Dokumentationsprüfung
-python3 ~/CODING/Homelab/tools/docs/check_docs.py ~/CODING/RemoteMouseFix
 ```
 
-Unter Windows ist MSVC der bevorzugte Weg, siehe [README.md](README.md).
+On Windows, MSVC is the preferred route, see [README.md](README.md).
 
-Ein Build gilt erst als geprüft, wenn er warnungsfrei übersetzt und ein Lauf einen Log
-mit `queue drops 0` erzeugt. Eine Änderung an der Korrektur gilt erst als geprüft, wenn
-sie gegen `MouseLookProbe` mit injizierten absoluten Eingaben in allen Modi getestet ist.
-Testläufe nie im Log-Ordner eines Nutzers ausführen: die Rotation löscht dort Belege.
+A build counts as verified only once it compiles without warnings and a run produces a log
+with `queue drops 0`. A change to the correction counts as verified only once it has been
+tested against `MouseLookProbe` with injected absolute input in every mode. Never run
+tests in a user's log folder: rotation deletes evidence there.
 
-## Themenkarte
+## Topic map
 
-| Thema | Ort |
+| Topic | Location |
 | --- | --- |
-| Logformat, Spalten, Leseverfahren für einen Klick ins 3D-Sichtfeld | [docs/diagnostics.md](docs/diagnostics.md) |
-| Build mit MSVC und Cross-Build, Konfigurationsschlüssel, Testabläufe | [README.md](README.md) |
-| Fehlerbild, Arbeitshypothese, Korrekturmodi | [README.md](README.md) |
-| Messergebnis vom 12.09.2026, Ursachenkette und Randbedingungen für Phase 2 | [docs/findings-2026-09-12.md](docs/findings-2026-09-12.md) |
+| Log format, columns, how to read a click into the 3D view | [docs/diagnostics.md](docs/diagnostics.md) |
+| Build with MSVC and cross-build, configuration keys, test procedures | [README.md](README.md) |
+| Symptom, working hypothesis, correction modes | [README.md](README.md) |
+| Measurement result of 2026-09-12, chain of causes and constraints for Phase 2 | [docs/findings-2026-09-12.md](docs/findings-2026-09-12.md) |

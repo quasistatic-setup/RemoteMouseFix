@@ -3,3 +3,9 @@ contact_links:
   - name: Read the README first
     url: https://github.com/quasistatic-setup/RemoteMouseFix#does-it-apply-to-my-setup
     about: Check whether your setup matches the measured case before filing a report.
+  - name: Questions and setup help
+    url: https://github.com/quasistatic-setup/RemoteMouseFix/discussions
+    about: Ask in Discussions if you are unsure whether your setup is affected.
+  - name: Report a security problem
+    url: https://github.com/quasistatic-setup/RemoteMouseFix/security/advisories/new
+    about: Security issues go through a private advisory, never through a public issue.

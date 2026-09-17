@@ -272,7 +272,14 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
         }
     }
 
+#ifdef _MSC_VER
+    // MSVC deprecates _wfopen; MinGW has no _wfopen_s.
+    if (_wfopen_s(&g_log, logPath.c_str(), L"w") != 0) {
+        g_log = nullptr;
+    }
+#else
     g_log = _wfopen(logPath.c_str(), L"w");
+#endif
     LogF("# MouseLookProbe client=%dx%d anchor_offset=(%ld,%ld) jump=%ld look_period_ms=%u\n",
          kClientWidth, kClientHeight, kAnchorOffset.x, kAnchorOffset.y, kJumpPx, kLookPeriodMs);
 

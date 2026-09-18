@@ -66,6 +66,7 @@ add_executable(RemoteMouseFix
     src/MouseHook.cpp
     src/ProcessInfo.cpp
     src/StateSampler.cpp
+    src/StatusView.cpp
     src/WinCompat.cpp
 )
 rmf_apply_common_settings(RemoteMouseFix)

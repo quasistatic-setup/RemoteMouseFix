@@ -27,6 +27,7 @@
 #include "rmf/MouseHook.h"
 #include "rmf/ProcessInfo.h"
 #include "rmf/StateSampler.h"
+#include "rmf/StatusView.h"
 #include "rmf/WinCompat.h"
 
 #include <windows.h>
@@ -101,6 +102,8 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD type) {
     }
 }
 
+// Plain console output, used for the header and the shutdown summary. While the status
+// panel is up, everything goes through StatusView instead, so nothing overwrites it.
 void ConsoleOut(const wchar_t* format, ...) {
     wchar_t buffer[1024];
     va_list args;
@@ -110,22 +113,7 @@ void ConsoleOut(const wchar_t* format, ...) {
     if (written <= 0) {
         return;
     }
-
-    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (out == INVALID_HANDLE_VALUE || out == nullptr) {
-        return;
-    }
-    DWORD ignored = 0;
-    // WriteConsoleW keeps Unicode intact regardless of the console code page.
-    if (!WriteConsoleW(out, buffer, static_cast<DWORD>(written), &ignored, nullptr)) {
-        // Redirected to a file or pipe: fall back to UTF-8 bytes.
-        const int bytes = WideCharToMultiByte(CP_UTF8, 0, buffer, written, nullptr, 0, nullptr, nullptr);
-        if (bytes > 0) {
-            std::string utf8(static_cast<std::size_t>(bytes), '\0');
-            WideCharToMultiByte(CP_UTF8, 0, buffer, written, utf8.data(), bytes, nullptr, nullptr);
-            WriteFile(out, utf8.data(), static_cast<DWORD>(utf8.size()), &ignored, nullptr);
-        }
-    }
+    rmf::ConsoleWrite(std::wstring(buffer, static_cast<std::size_t>(written)));
 }
 
 std::wstring Format(const wchar_t* format, ...) {
@@ -304,6 +292,20 @@ int main() {
     }
     correction.allowed = lockReason.empty(); // written before the hook exists, read-only after
 
+    // The same fact in two vocabularies: lockReason goes into the log in the config's own
+    // terms, lockHint onto the screen for someone who has never read the config.
+    std::wstring lockHint;
+    if (cfg.diagnosticMode) {
+        lockHint = L"this profile never touches the mouse";
+    } else if (!offHotkeyRegistered) {
+        lockHint = L"another program holds the emergency-off hotkey Ctrl+Alt+C";
+    }
+
+    rmf::StatusView panel;
+    // Written by whichever thread trips a watchdog, read by the status thread.
+    std::mutex   safetyStopMutex;
+    std::wstring safetyStopReason;
+
     const bool elevated = rmf::IsProcessElevated();
 
     // ---- session header --------------------------------------------------------------
@@ -379,13 +381,23 @@ int main() {
     ConsoleOut(L"  correction     : %ls\n",
                correction.allowed ? L"permitted (Ctrl+Alt+1 / Ctrl+Alt+2, Ctrl+Alt+C = off)"
                                   : (L"LOCKED OFF - " + lockReason).c_str());
-    if (cfg.diagnosticMode) {
-        ConsoleOut(L"  To test correction, close this window and run Start-AB-Test.cmd.\n");
-    }
     for (const auto& failed : failedHotkeys) {
         ConsoleOut(L"  HOTKEY FAILED  : %ls\n", failed.c_str());
     }
     ConsoleOut(L"\n");
+
+    // From here on the panel owns the bottom of the window. Everything else has to go
+    // through panel.Notice, or it would be painted over on the next refresh.
+    {
+        rmf::StatusSnapshot initial;
+        initial.targetProcess     = cfg.targetProcess;
+        initial.correctionAllowed = correction.allowed;
+        initial.lockReason        = lockHint;
+        initial.game              = rmf::IsProcessRunning(cfg.targetProcess)
+                                        ? rmf::GameState::Background
+                                        : rmf::GameState::NotRunning;
+        panel.Start(cfg.consoleStatusIntervalMs > 0, initial);
+    }
 
     // The ring holds 16384 events of well over 100 bytes each, several megabytes: far too
     // large for the default 1 MB (MSVC) or 2 MB (MinGW) main-thread stack. On the stack it
@@ -406,7 +418,11 @@ int main() {
         LogLine(L"## CORRECTION DISABLED by watchdog: " + reason + L" (was " +
                 rmf::CorrectionModeName(was) + L")");
         FlushLog();
-        ConsoleOut(L"\n  !! correction switched OFF by watchdog: %ls\n", reason.c_str());
+        {
+            std::lock_guard<std::mutex> guard(safetyStopMutex);
+            safetyStopReason = reason;
+        }
+        panel.Notice(rmf::NoticeLevel::Error, L"the fix switched itself off: " + reason);
     };
 
     // ---- state sampler -----------------------------------------------------------------
@@ -517,15 +533,25 @@ int main() {
             LogLine(L"## CORRECTION refused mode=" + std::wstring(rmf::CorrectionModeName(target)) +
                     L": " + lockReason);
             FlushLog();
-            ConsoleOut(L"\n  correction refused: %ls\n", lockReason.c_str());
+            panel.Notice(rmf::NoticeLevel::Warn, L"the fix cannot be switched on: " + lockHint);
             return;
         }
         const rmf::CorrectionMode previous = correction.SetMode(target);
         consecutiveOutputFailures = 0;
+        if (target != rmf::CorrectionMode::Off) {
+            // Switching a mode back on clears the last stop, so the panel stops showing a
+            // red line for something the player has already dealt with.
+            std::lock_guard<std::mutex> guard(safetyStopMutex);
+            safetyStopReason.clear();
+        }
         LogLine(Format(L"## CORRECTION mode=%ls previous=%ls source=%ls",
                        rmf::CorrectionModeName(target), rmf::CorrectionModeName(previous), source));
         FlushLog();
-        ConsoleOut(L"\n  correction: %ls\n", rmf::CorrectionModeName(target));
+        panel.Notice(target == rmf::CorrectionMode::Off ? rmf::NoticeLevel::Warn
+                                                        : rmf::NoticeLevel::Good,
+                     target == rmf::CorrectionMode::Off
+                         ? std::wstring(L"the fix is now off")
+                         : L"the fix is now on (" + std::wstring(rmf::CorrectionModeName(target)) + L")");
     };
 
     if (cfg.correctionMode != rmf::CorrectionMode::Off) {
@@ -549,18 +575,19 @@ int main() {
 
     DWORD hookError = 0;
     if (!hook.Install(wiring, hookError)) {
-        ConsoleOut(L"  FATAL: SetWindowsHookEx(WH_MOUSE_LL) failed, error %lu\n", hookError);
+        panel.Notice(rmf::NoticeLevel::Error,
+                     Format(L"cannot watch the mouse: SetWindowsHookEx failed with error %lu", hookError));
+        panel.Stop();
         sampler.Stop();
         LogLine(L"# FATAL: SetWindowsHookEx(WH_MOUSE_LL) failed, error " + std::to_wstring(hookError));
         logger.Close();
         return 4;
     }
 
-    ConsoleOut(L"  hook installed. Ctrl+Alt+M marker | Ctrl+Alt+P pause | Ctrl+Alt+Q quit\n");
+    panel.Notice(rmf::NoticeLevel::Good, L"watching the mouse now");
     if (runSeconds > 0) {
-        ConsoleOut(L"  auto-stop in %u seconds\n", runSeconds);
+        panel.Notice(rmf::NoticeLevel::Info, Format(L"this run stops by itself in %u seconds", runSeconds));
     }
-    ConsoleOut(L"  waiting for %ls to come to the foreground...\n\n", cfg.targetProcess.c_str());
 
     // ---- writer thread -----------------------------------------------------------------
     std::atomic<std::uint64_t> writtenEvents {0};
@@ -673,13 +700,38 @@ int main() {
     std::thread status;
     if (cfg.consoleStatusIntervalMs > 0) {
         status = std::thread([&] {
+            bool      gameRunning     = false;
+            ULONGLONG lastProcessScan = 0;
             while (g_running.load(std::memory_order_relaxed)) {
-                const bool inFg = targetInForeground.load();
-                ConsoleOut(L"\r  [%ls] corr=%-12ls ev=%llu inj=%llu drop=%llu apply=%llu anchor=%llu jump=%llu wd=%llu   ",
-                           filter.paused.load() ? L"PAUSED " : (inFg ? L"ACTIVE " : L"idle   "),
-                           modeLabel(), U(writtenEvents), U(injectedCount),
-                           U(correction.suppressed), U(correction.applied),
-                           U(anchorCount), U(jumpCount), U(correction.watchdogTrips));
+                rmf::StatusSnapshot snap;
+                snap.targetProcess     = cfg.targetProcess;
+                snap.loggingPaused     = filter.paused.load();
+                snap.correctionAllowed = correction.allowed;
+                snap.mode              = correction.Mode();
+                snap.lockReason        = lockHint;
+                {
+                    std::lock_guard<std::mutex> guard(safetyStopMutex);
+                    snap.safetyStopReason = safetyStopReason;
+                }
+                if (targetInForeground.load()) {
+                    snap.game   = rmf::GameState::Foreground;
+                    gameRunning = true;
+                } else {
+                    // Walking the process list is too expensive for every refresh, and
+                    // "has the game been started at all" changes slowly.
+                    const ULONGLONG tick = GetTickCount64();
+                    if (lastProcessScan == 0 || tick - lastProcessScan >= 2000) {
+                        gameRunning     = rmf::IsProcessRunning(cfg.targetProcess);
+                        lastProcessScan = tick;
+                    }
+                    snap.game = gameRunning ? rmf::GameState::Background : rmf::GameState::NotRunning;
+                }
+                snap.events      = writtenEvents.load();
+                snap.jumps       = jumpCount.load();
+                snap.corrections = correction.applied.load();
+                snap.problems    = correction.outputFailures.load() +
+                                   static_cast<unsigned long long>(queue.Dropped());
+                panel.Update(snap);
                 for (unsigned slept = 0;
                      slept < cfg.consoleStatusIntervalMs && g_running.load(std::memory_order_relaxed);
                      slept += 50) {
@@ -887,7 +939,8 @@ int main() {
                                    snap.clipIsFullScreen ? L"released" : L"CONFINED",
                                    modeLabel()));
                     FlushLog();
-                    ConsoleOut(L"\n  marker #%u written\n", markerCounter);
+                    panel.Notice(rmf::NoticeLevel::Info,
+                                 Format(L"marker #%u written to the log", markerCounter));
                     break;
                 }
                 case kHotkeyPause: {
@@ -896,11 +949,13 @@ int main() {
                     LogLine(nowPaused ? L"## CAPTURE PAUSED by operator (correction unaffected)"
                                       : L"## CAPTURE RESUMED by operator");
                     FlushLog();
-                    ConsoleOut(L"\n  logging %ls\n", nowPaused ? L"paused" : L"resumed");
+                    panel.Notice(nowPaused ? rmf::NoticeLevel::Warn : rmf::NoticeLevel::Info,
+                                 nowPaused ? L"logging paused, the fix keeps working"
+                                           : L"logging resumed");
                     break;
                 }
                 case kHotkeyQuit:
-                    ConsoleOut(L"\n  quit requested\n");
+                    panel.Notice(rmf::NoticeLevel::Info, L"closing down");
                     g_running.store(false);
                     break;
                 case kHotkeyCorrectionOff:
@@ -941,6 +996,7 @@ int main() {
             worker->join();
         }
     }
+    panel.Stop();
 
     {
         std::vector<std::wstring> footer;
@@ -963,7 +1019,7 @@ int main() {
         LogLines(footer);
     }
 
-    ConsoleOut(L"\n\n  stopped. %llu events logged, %llu suppressed, %llu applied, %llu watchdog trips\n",
+    ConsoleOut(L"  stopped. %llu events logged, %llu suppressed, %llu applied, %llu watchdog trips\n",
                U(writtenEvents), U(correction.suppressed), U(correction.applied),
                U(correction.watchdogTrips));
     if (queue.Dropped() > 0) {

@@ -6,6 +6,14 @@
 
 namespace rmf {
 
+// True when at least one running process carries this image file name, compared
+// case-insensitively. Used by the status panel to tell "the game has not been started
+// yet" apart from "the game runs, but another window is in front" - a distinction the
+// foreground state alone cannot make, and the one users read wrong most often.
+//
+// Walks the process list, so it belongs on a slow timer, never in the hook callback.
+bool IsProcessRunning(const std::wstring& imageFileName);
+
 // Caches PID -> image file name so the writer thread never pays for a process query
 // twice, and so the hook thread can take a fast "is this even the target" decision.
 //

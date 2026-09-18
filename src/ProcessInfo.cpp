@@ -1,6 +1,8 @@
 #include "rmf/ProcessInfo.h"
 #include "rmf/WinCompat.h"
 
+#include <tlhelp32.h>
+
 #include <algorithm>
 
 namespace rmf {
@@ -31,6 +33,29 @@ bool GetProcessCreateTime(DWORD pid, FILETIME& out) {
 }
 
 } // namespace
+
+bool IsProcessRunning(const std::wstring& imageFileName) {
+    if (imageFileName.empty()) {
+        return false;
+    }
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    PROCESSENTRY32W entry {};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (EqualsIgnoreCase(entry.szExeFile, imageFileName)) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
 
 ProcessNameCache::ProcessNameCache(std::wstring targetProcessName)
     : target_(std::move(targetProcessName)) {}

@@ -79,4 +79,5 @@ tests in a user's log folder: rotation deletes evidence there.
 | Log format, columns, how to read a click into the 3D view | [docs/diagnostics.md](docs/diagnostics.md) |
 | Build with MSVC and cross-build, configuration keys, test procedures | [README.md](README.md) |
 | Symptom, working hypothesis, correction modes | [README.md](README.md) |
+| What the console panel shows while the tool runs | [README.md](README.md) |
 | Measurement result of 2026-09-12, chain of causes and constraints for Phase 2 | [docs/findings-2026-09-12.md](docs/findings-2026-09-12.md) |

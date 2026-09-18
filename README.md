@@ -58,6 +58,29 @@ If the value does not match the release notes, do not run the program. The full 
 in this repository and can be built yourself, see
 [Build from source](#build-from-source).
 
+### What the console window shows
+
+The console keeps a live panel at the bottom. Each line answers one question, and the
+colour repeats the answer: green means working, yellow means waiting for you, red means
+the fix stopped itself.
+
+```text
+  GAME  *  Wow.exe is in front
+  FIX   *  on (absolute) - correcting the pointer
+  WORK     20 jumps seen, 51 corrections applied
+  NEXT  >  Everything is working. Ctrl+Alt+C switches the fix off at any time.
+  KEYS     Ctrl+Alt+1 fix on | Ctrl+Alt+C fix off | Ctrl+Alt+P pause log | Ctrl+Alt+Q quit
+```
+
+`GAME` is yellow while the game is not running or while another window is in front: the
+fix only works on the window you are actually playing in, so clicking into the game is
+what turns this line green. `FIX` turns red when a watchdog switched the correction off,
+and then says why; that state stays on screen instead of scrolling away. `NEXT` always
+names the one thing to do next.
+
+Set `NO_COLOR=1` for a monochrome panel. When the output is redirected to a file, the
+panel is printed once per change instead of being repainted.
+
 ### Controls
 
 | Hotkey | Effect |
@@ -94,8 +117,8 @@ input or text, and it has no upload or network feature. You decide whether to sh
 
 1. Start the game and move to a quiet, safe location.
 2. Double-click `Start-AB-Test.cmd` from the RemoteMouseFix folder.
-3. Confirm that the console names `config-ab-test.json`, shows `corr=absolute`, and changes
-   from `idle` to `ACTIVE` when the game is in front.
+3. Confirm that the console names `config-ab-test.json` and that the panel shows
+   `FIX` on with `absolute`, and `GAME` turning green when you click into the game.
 4. Test the same actions in each mode: `absolute`, `off`, then `relative`.
    Use `Ctrl+Alt+1`, `Ctrl+Alt+C` and `Ctrl+Alt+2` to select the modes.
 5. Before every action, press `Ctrl+Alt+M` to add a marker to the log:

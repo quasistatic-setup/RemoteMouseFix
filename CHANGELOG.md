@@ -7,6 +7,13 @@ correction is still experimental.
 
 ## [Unreleased]
 
+### Changed
+
+- The console shows a colour-coded status panel instead of a single line of counters:
+  one line for the game window, one for the fix, one for what it has done and one that
+  names the next step. A correction that a watchdog switched off now stays visible in red
+  until it is switched back on, and the hotkeys stay on screen.
+
 ### Fixed
 
 - `MouseLookProbe` opens its log through `_wfopen_s` under MSVC, so the build stays free of

@@ -10,7 +10,8 @@
 // foreground process, which is what decides the UIPI question.
 //
 // It moves the pointer by one pixel and back, touches nothing else, and writes its result
-// to input-echo-check.txt next to the working directory so it can be attached to a report.
+// to logs\input-echo-check.txt beside the program, where the diagnostic logs already are,
+// so it can be attached to a report without leaving stray files in the program folder.
 #include <windows.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
+#include <string>
 #include <vector>
 
 namespace {
@@ -77,6 +79,22 @@ void Pump(int milliseconds) {
         }
         Sleep(10);
     }
+}
+
+// Beside the EXE, not in the working directory: a double-click and a call from a shell
+// must put the result in the same place.
+std::wstring ResultFilePath() {
+    wchar_t exePath[MAX_PATH] = L"";
+    const DWORD length = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring folder(exePath, length);
+    const std::size_t slash = folder.find_last_of(L"\\/");
+    folder = (slash == std::wstring::npos) ? std::wstring(L".") : folder.substr(0, slash);
+
+    const std::wstring logs = folder + L"\\logs";
+    if (CreateDirectoryW(logs.c_str(), nullptr) != 0 || GetLastError() == ERROR_ALREADY_EXISTS) {
+        return logs + L"\\input-echo-check.txt";
+    }
+    return folder + L"\\input-echo-check.txt";
 }
 
 bool IsRemoteMouseFixRunning() {
@@ -150,7 +168,8 @@ int main() {
         countdown = 0;
     }
 
-    if (_wfopen_s(&g_out, L"input-echo-check.txt", L"w, ccs=UTF-8") != 0) {
+    const std::wstring resultPath = ResultFilePath();
+    if (_wfopen_s(&g_out, resultPath.c_str(), L"w, ccs=UTF-8") != 0) {
         g_out = nullptr; // the console output alone still answers the question
     }
 
@@ -236,7 +255,7 @@ int main() {
 
     if (g_out != nullptr) {
         fclose(g_out);
-        wprintf(L"\n  Written to input-echo-check.txt. Press Enter to close.\n");
+        wprintf(L"\n  Written to %ls\n  Press Enter to close.\n", resultPath.c_str());
     } else {
         wprintf(L"\n  Press Enter to close.\n");
     }

@@ -116,6 +116,19 @@ void ConsoleOut(const wchar_t* format, ...) {
     rmf::ConsoleWrite(std::wstring(buffer, static_cast<std::size_t>(written)));
 }
 
+// A name the caller meant relative to the program, not an absolute or rooted path.
+bool IsRelativePath(const std::wstring& path) {
+    if (path.size() >= 2 && path[1] == L':') {
+        return false;
+    }
+    return path.empty() || (path[0] != L'\\' && path[0] != L'/');
+}
+
+bool FileExists(const std::wstring& path) {
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
 std::wstring Format(const wchar_t* format, ...) {
     wchar_t buffer[1024];
     va_list args;
@@ -230,7 +243,20 @@ int main() {
             LocalFree(argv);
         }
     }
-    configPath = rmf::ResolveAgainstExeDir(configPath.empty() ? std::wstring(L"config.json") : configPath);
+    // Profiles ship in config\ next to the EXE. A relative path that is not there is
+    // looked up in that folder as well, so a folder from an older release, or a launcher
+    // that still names config-play.json directly, keeps working instead of silently
+    // falling back to the built-in defaults.
+    {
+        const std::wstring requested = configPath.empty() ? std::wstring(L"config.json") : configPath;
+        configPath                   = rmf::ResolveAgainstExeDir(requested);
+        if (!FileExists(configPath) && IsRelativePath(requested)) {
+            const std::wstring inConfigFolder = rmf::ResolveAgainstExeDir(L"config\\" + requested);
+            if (FileExists(inConfigFolder)) {
+                configPath = inConfigFolder;
+            }
+        }
+    }
 
     rmf::Config cfg;
     rmf::LoadConfig(configPath, cfg);

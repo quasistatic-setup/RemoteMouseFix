@@ -37,6 +37,20 @@ mouse button is held while the pointer moves slowly left and right.
 The gameplay profile targets `Wow.exe` and enables the recommended `absolute` correction
 immediately. It keeps compact diagnostic logs in the `logs` folder beside the program.
 
+The extracted folder holds the two launchers and the two programs; everything else stays
+in a folder of its own:
+
+```text
+  Start-Playing.cmd       play with the correction on
+  Start-AB-Test.cmd       compare the modes and record a detailed log
+  RemoteMouseFix.exe      the tool itself
+  InputEchoCheck.exe      companion check, see below
+  README.md  LICENSE
+  config/                 the three profiles
+  docs/                   diagnostic reference
+  logs/                   created on the first start
+```
+
 ### Windows warnings on first start
 
 The release EXE is not code-signed, and RemoteMouseFix installs a low-level mouse hook and
@@ -214,12 +228,15 @@ The release EXE is statically linked and depends only on Windows system librarie
 
 ## Configuration
 
-`config.json` is read from the EXE directory unless another path is supplied as the first
-command-line argument:
+`config\config.json` is read from the program folder unless another path is supplied as
+the first command-line argument:
 
 ```text
 RemoteMouseFix.exe [path\to\config.json] [--seconds N]
 ```
+
+A relative name that is not found beside the EXE is looked up in `config\` as well, so a
+folder from a release before 0.7 keeps working after an in-place update.
 
 Keys beginning with `_` in the supplied configuration files are explanatory comments.
 

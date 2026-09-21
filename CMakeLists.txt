@@ -72,16 +72,20 @@ add_executable(RemoteMouseFix
 rmf_apply_common_settings(RemoteMouseFix)
 target_link_libraries(RemoteMouseFix PRIVATE user32 gdi32 shell32 shcore)
 
-# Ship both configs next to the EXE so the build output is directly usable.
+# Reproduce the shipped layout next to the EXE, so a build output can be run and tested
+# exactly like an unpacked release: launchers at the top, profiles in config\.
 add_custom_command(TARGET RemoteMouseFix POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:RemoteMouseFix>/config"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/config/config.json"
             "${CMAKE_SOURCE_DIR}/config/config-ab-test.json"
             "${CMAKE_SOURCE_DIR}/config/config-play.json"
+            "$<TARGET_FILE_DIR:RemoteMouseFix>/config"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/config/Start-AB-Test.cmd"
             "${CMAKE_SOURCE_DIR}/config/Start-Playing.cmd"
             "$<TARGET_FILE_DIR:RemoteMouseFix>"
-    COMMENT "Copying config files next to RemoteMouseFix.exe")
+    COMMENT "Staging the shipped layout next to RemoteMouseFix.exe")
 
 # Diagnostic companion: proves whether our synthetic input comes back through our own
 # hook. Always built, because testers need it, not only developers.
@@ -98,13 +102,17 @@ if(RMF_BUILD_PROBE)
     target_link_libraries(MouseLookProbe PRIVATE user32 gdi32 shell32)
 endif()
 
+# What an unpacked release looks like: the two launchers, the programs, README and
+# LICENSE at the top, everything else in a folder of its own.
 install(TARGETS RemoteMouseFix InputEchoCheck RUNTIME DESTINATION .)
 install(FILES
-    config/config.json
-    config/config-ab-test.json
-    config/config-play.json
     config/Start-AB-Test.cmd
     config/Start-Playing.cmd
     README.md LICENSE
     DESTINATION .)
+install(FILES
+    config/config.json
+    config/config-ab-test.json
+    config/config-play.json
+    DESTINATION config)
 install(FILES docs/diagnostics.md DESTINATION docs)

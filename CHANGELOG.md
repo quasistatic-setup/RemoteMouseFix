@@ -7,6 +7,14 @@ correction is still experimental.
 
 ## [Unreleased]
 
+### Changed
+
+- The released package keeps only the launchers, the two programs, README and LICENSE at
+  the top level; the profiles move to `config\`, and `InputEchoCheck` writes its result
+  into `logs\` instead of the program folder. A relative configuration name that is not
+  found beside the EXE is now also looked up in `config\`, so an older folder and the
+  previous command line keep working.
+
 ### Added
 
 - `InputEchoCheck.exe`, a companion that measures whether our own `SendInput` returns

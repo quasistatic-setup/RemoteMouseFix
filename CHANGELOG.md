@@ -7,6 +7,13 @@ correction is still experimental.
 
 ## [Unreleased]
 
+### Added
+
+- `InputEchoCheck.exe`, a companion that measures whether our own `SendInput` returns
+  through our own hook and reports the foreground window's integrity level. It answers the
+  watchdog reason "own moves never reached the hook", which `SendInput` itself cannot,
+  because UIPI discards input without failing the call.
+
 ### Changed
 
 - The console shows a colour-coded status panel instead of a single line of counters:

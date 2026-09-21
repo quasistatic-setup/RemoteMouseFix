@@ -274,6 +274,19 @@ For a toolchain outside `PATH`, add
 `-DRMF_MINGW_PREFIX=$HOME/.local/opt/mingw-w64/usr`. Use `-DRMF_BUILD_PROBE=OFF` to omit
 the test probe. `CMakeLists.txt` rejects a native Linux target.
 
+## Check whether input reaches the game
+
+If the correction switches itself off with "own moves never reached the hook", run
+`InputEchoCheck.exe` from the same folder. It sends eight signed mouse moves of one pixel
+and reports how many come back through its own low-level hook, along with the foreground
+window and its integrity level, which decides whether Windows discards synthetic input
+silently (UIPI). Start it, click into the game during the countdown, hold the right mouse
+button to have the mouse-look state measured, and attach the resulting
+`input-echo-check.txt` to a report.
+
+Quit RemoteMouseFix first, with `Ctrl+Alt+Q`. While it corrects, it withholds exactly the
+kind of input this check sends, so its filter, not the system, would decide the result.
+
 ## Developer test with MouseLookProbe
 
 `MouseLookProbe.exe` reproduces the measured mouse-look mechanism without the game. It
@@ -300,6 +313,7 @@ RemoteMouseFix/
   include/rmf/                  C++ headers
   src/                          application implementation
   tools/probe/                  stand-in game and remote-input emulator
+  tools/echo-check/             input echo and integrity-level check
 ```
 
 ## Contributing

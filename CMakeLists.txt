@@ -83,6 +83,12 @@ add_custom_command(TARGET RemoteMouseFix POST_BUILD
             "$<TARGET_FILE_DIR:RemoteMouseFix>"
     COMMENT "Copying config files next to RemoteMouseFix.exe")
 
+# Diagnostic companion: proves whether our synthetic input comes back through our own
+# hook. Always built, because testers need it, not only developers.
+add_executable(InputEchoCheck tools/echo-check/InputEchoCheck.cpp)
+rmf_apply_common_settings(InputEchoCheck)
+target_link_libraries(InputEchoCheck PRIVATE user32 advapi32 shell32)
+
 if(RMF_BUILD_PROBE)
     add_executable(MouseLookProbe WIN32
         tools/probe/MouseLookProbe.cpp
@@ -92,7 +98,7 @@ if(RMF_BUILD_PROBE)
     target_link_libraries(MouseLookProbe PRIVATE user32 gdi32 shell32)
 endif()
 
-install(TARGETS RemoteMouseFix RUNTIME DESTINATION .)
+install(TARGETS RemoteMouseFix InputEchoCheck RUNTIME DESTINATION .)
 install(FILES
     config/config.json
     config/config-ab-test.json

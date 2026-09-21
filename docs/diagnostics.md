@@ -142,6 +142,14 @@ discarded so output could follow the new direction immediately. Opposing movemen
 | consecutive `SendInput` failures | the output call itself failed `watchdog_max_output_failures` times in a row |
 | own moves never reached the hook | more than `watchdog_max_unechoed` signed events are outstanding: synthetic input is discarded silently, typically because the game runs elevated |
 
+The last reason names the usual cause but cannot prove it, because `SendInput` reports
+success even when UIPI discards the input. `InputEchoCheck.exe` settles it: it sends eight
+signed moves of one pixel, counts how many return through its own hook and prints the
+integrity level of the foreground window, which is what UIPI compares against. Quit
+RemoteMouseFix before running it, otherwise its filter withholds the check's input while
+the cursor is hidden and the result describes the filter rather than the system; the tool
+says so when it notices.
+
 ## Heartbeat and marker lines
 
 ```

@@ -337,9 +337,9 @@ RemoteMouseFix/
 
 Reports from other setups are the most useful contribution, see
 [Report a problem or test another setup](#report-a-problem-or-test-another-setup).
-[CONTRIBUTING.md](CONTRIBUTING.md) describes the build, the test requirements and the
+[CONTRIBUTING.md](.github/CONTRIBUTING.md) describes the build, the test requirements and the
 safety rules every change has to respect. Security problems go through
-[SECURITY.md](SECURITY.md), not through a public issue. Released changes are listed in
+[SECURITY.md](.github/SECURITY.md), not through a public issue. Released changes are listed in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## Support

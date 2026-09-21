@@ -5,8 +5,8 @@
     "docs/diagnostics.md",
     "docs/findings-2026-09-12.md",
     "CHANGELOG.md",
-    "CONTRIBUTING.md",
-    "SECURITY.md"
+    ".github/CONTRIBUTING.md",
+    ".github/SECURITY.md"
   ],
   "document_roots": [
     "docs"

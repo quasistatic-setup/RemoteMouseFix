@@ -7,13 +7,7 @@ correction is still experimental.
 
 ## [Unreleased]
 
-### Changed
-
-- The released package keeps only the launchers, the two programs, README and LICENSE at
-  the top level; the profiles move to `config\`, and `InputEchoCheck` writes its result
-  into `logs\` instead of the program folder. A relative configuration name that is not
-  found beside the EXE is now also looked up in `config\`, so an older folder and the
-  previous command line keep working.
+## [0.7.0] - 2026-09-21
 
 ### Added
 
@@ -28,6 +22,11 @@ correction is still experimental.
   one line for the game window, one for the fix, one for what it has done and one that
   names the next step. A correction that a watchdog switched off now stays visible in red
   until it is switched back on, and the hotkeys stay on screen.
+- The released package keeps only the launchers, the two programs, README and LICENSE at
+  the top level; the profiles move to `config\`, and `InputEchoCheck` writes its result
+  into `logs\` instead of the program folder. A relative configuration name that is not
+  found beside the EXE is now also looked up in `config\`, so an older folder and the
+  previous command line keep working.
 
 ### Fixed
 
@@ -87,7 +86,8 @@ Phase 1, observation only.
   TeamViewer-shaped absolute input stream.
 - Dated measurement report in [docs/findings-2026-09-12.md](docs/findings-2026-09-12.md).
 
-[Unreleased]: https://github.com/quasistatic-setup/RemoteMouseFix/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/quasistatic-setup/RemoteMouseFix/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/quasistatic-setup/RemoteMouseFix/releases/tag/v0.7.0
 [0.6.0]: https://github.com/quasistatic-setup/RemoteMouseFix/releases/tag/v0.6.0
 [0.2.0]: https://github.com/quasistatic-setup/RemoteMouseFix/commit/cafe36a
 [0.1.0]: https://github.com/quasistatic-setup/RemoteMouseFix/commit/aa00292

@@ -210,3 +210,52 @@ delta. `own seen` should track `applied` closely in both correction modes.
   mode the `OWN` position must equal `target`. In `relative` mode the `OWN` move's offset
   from the anchor (`anc=`) shows what pointer speed and acceleration made of `rd`;
   comparing the two measures the acceleration distortion directly.
+
+## Opt-in timing trace for intermittent camera stalls
+
+The `Start-AB-Test.cmd` profile now sets `trace_correction_timing=true` and writes to
+`logs-ab/` beside the executable (separate from the ordinary `logs/` gameplay
+directory). The normal gameplay and diagnostic-only profiles leave this trace off.
+`diagnostic_mode=true` is **not** the way to enable it: that setting locks all correction.
+
+With absolute correction active and WoW holding the hidden cursor, the message loop writes
+one aggregated `## TIMING` line approximately every 250 ms:
+
+```text
+## TIMING qpc_ms=81234567 window_ms=256 ticks=16 max_timer_gap_ms=19 input=14 apply=13 skip=no_anchor:0,cursor:0,off_anchor:2,empty:1 pending=(+10,+0) pending_age_ms=87 input_age_ms=12 anchor_delta=(+5,+0) anchor=(803,554) cursor=(808,554)
+```
+
+- `qpc_ms` uses the same system clock as `APPLY qpc_ms`; `window_ms` is elapsed
+  time since the previous summary. These are diagnostics, **not frame times**.
+- `ticks` counts received `WM_TIMER` callbacks, and `max_timer_gap_ms` is the
+  largest gap between consecutive callbacks in that window (including message-loop delays).
+- `input` counts remote deltas posted by the hook to the message loop. Cross-reference
+  `DROP` events and their QPC timestamps in the same trace to distinguish missing
+  TeamViewer input from delayed processing.
+- `apply` counts attempted output steps; successes/failures are in `APPLY` lines.
+- `skip` counts timer cycles unable to emit because the anchor was not yet learned,
+  `GetCursorPos` failed, the cursor was outside the configured anchor tolerance,
+  or the pending movement was zero. The counts are mutually exclusive.
+- `pending` is the unsent horizontal/vertical delta. `pending_age_ms` measures how long
+  movement has stayed continuously queued (an estimate of age, not the oldest pixel's age).
+  `input_age_ms` is the time since the last processed remote delta, or -1 before the
+  first observed delta in a held-cursor phase.
+- `anchor_delta` is the last observed offset from the learned anchor; `anchor` and
+  `cursor` are the last measured screen coordinates. These values are from the last
+  timer check, not necessarily the same instant as the summary.
+
+No new logging takes place inside the mouse hook. The trace is a sampled aggregate,
+not proof that WoW consumed each injected move. Do not infer a cause merely from the
+counts; compare them around visible stalls against `DROP`, `APPLY` and `OWN`.
+
+For a practical WoW test: start `Start-AB-Test.cmd`, leave `absolute` correction on,
+mark the beginning with `Ctrl+Alt+M`, hold right-click and rotate slowly for 20–30 s
+through several pauses, then quit with `Ctrl+Alt+Q`. Optionally mark and record a
+short `off` reference with `Ctrl+Alt+C`; expect camera jumps without the fix.
+Do not alter the smoothing or anchor tolerance for the measurement.
+
+**Keep historical evidence outside the rotating directory.** The A/B profile keeps up
+to 50 files of 8 MiB in `logs-ab/` and still deletes the oldest matching files.
+Before repeating tests, copy important captures into a separate folder that does not
+contain the `remotemousefix-*.log` rotation target. Preserve the raw timestamps, and
+do not commit session logs to Git.

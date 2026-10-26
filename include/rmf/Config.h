@@ -36,6 +36,7 @@ struct Config {
     int      anchorTolerancePx       = 3;     // real move this close to the learned anchor => ANCHOR
     unsigned statePollIntervalMs     = 10;    // cursor visibility / clip / anchor sampling period
     bool     logStateChanges         = true;
+    bool     traceCorrectionTiming   = false; // aggregate timing/anchor-gate data; A/B only
     unsigned consoleStatusIntervalMs = 2000;  // 0 disables the live console status line
     unsigned heartbeatIntervalMs     = 10000; // periodic liveness line, 0 disables it
 

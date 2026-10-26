@@ -235,7 +235,7 @@ one aggregated `## TIMING` line approximately every 250 ms:
 - `apply` counts attempted output steps; successes/failures are in `APPLY` lines.
 - `skip` counts timer cycles unable to emit because the anchor was not yet learned,
   `GetCursorPos` failed, the cursor was outside the configured anchor tolerance,
-  or the pending movement was zero. The counts are mutually exclusive.
+  or the final check had no movement pending. Anchor-related counts only include cycles with queued movement.
 - `pending` is the unsent horizontal/vertical delta. `pending_age_ms` measures how long
   movement has stayed continuously queued (an estimate of age, not the oldest pixel's age).
   `input_age_ms` is the time since the last processed remote delta, or -1 before the

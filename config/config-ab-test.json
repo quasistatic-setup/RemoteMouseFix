@@ -19,12 +19,12 @@
   "watchdog_max_output_failures": 5,
 
   "_log_directory": "Relative paths resolve next to RemoteMouseFix.exe.",
-  "log_directory": "logs",
+  "log_directory": "logs-ab",
   "log_file_prefix": "remotemousefix",
 
   "_rotation": "Roll over past max_log_bytes and keep at most max_log_files files.",
   "max_log_bytes": 8388608,
-  "max_log_files": 5,
+  "max_log_files": 50,
 
   "_flush_on_button": "Flush after every button event so a crash still keeps the interesting moment.",
   "flush_on_button": true,
@@ -38,6 +38,8 @@
   "_state_poll_interval_ms": "Sampling period for cursor visibility, ClipCursor state and anchor learning.",
   "state_poll_interval_ms": 10,
   "log_state_changes": true,
+  "_trace_correction_timing": "Log 250 ms timing/anchor-gate summaries while absolute correction is active and the game holds the cursor.",
+  "trace_correction_timing": true,
 
   "_console_status_interval_ms": "Live counter refresh in the console. 0 disables it.",
   "console_status_interval_ms": 2000,

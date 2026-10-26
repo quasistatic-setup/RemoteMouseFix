@@ -1008,13 +1008,13 @@ int main() {
             // camera motion. The learned anchor is the proof that the previous step was
             // read and the game warped back.
             if (!filter.anchorValid.load(std::memory_order_relaxed)) {
-                if (cfg.traceCorrectionTiming) ++timing.missingAnchor;
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.missingAnchor;
                 continue;
             }
             const rmf::StateSampler::Snapshot snap = sampler.Current();
             POINT current {};
             if (!GetCursorPos(&current)) {
-                if (cfg.traceCorrectionTiming) ++timing.cursorReadFailed;
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.cursorReadFailed;
                 continue;
             }
             const long anchorX = snap.clientScreenRect.left +
@@ -1029,7 +1029,7 @@ int main() {
             }
             if (std::abs(current.x - anchorX) > cfg.anchorTolerancePx ||
                 std::abs(current.y - anchorY) > cfg.anchorTolerancePx) {
-                if (cfg.traceCorrectionTiming) ++timing.offAnchor;
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.offAnchor;
                 continue;
             }
             const long dx = static_cast<long>(std::clamp(

@@ -126,8 +126,11 @@ can still add latency.
 
 ## Report a problem or test another setup
 
-The A/B profile records detailed mouse movement for comparison. It never records keyboard
-input or text, and it has no upload or network feature. You decide whether to share a log.
+The A/B profile records detailed mouse movement for comparison. It also enables a
+250 ms correction-timing summary for diagnosing stalls caused by timer delays, pending
+movement or an out-of-tolerance warp anchor. Its logs go to `logs-ab/`, separate from
+the `logs/` directory used during normal play. It never records keyboard input or text,
+and it has no upload or network feature. You decide whether to share a log.
 
 1. Start the game and move to a quiet, safe location.
 2. Double-click `Start-AB-Test.cmd` from the RemoteMouseFix folder.
@@ -249,6 +252,7 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 | `watchdog_max_unechoed` | `50` | own events allowed outstanding before the echo watchdog trips |
 | `watchdog_max_output_failures` | `5` | consecutive failed output calls before the watchdog trips |
 | `log_mouse_moves` | `true` | `false` records buttons, wheel and state only |
+| `trace_correction_timing` | `false` | Opt-in aggregated 250 ms timing and anchor-gate diagnostics for absolute correction; enabled in A/B profile only |
 | `log_directory` | `logs` | relative paths resolve beside the EXE |
 | `log_file_prefix` | `remotemousefix` | log filename prefix |
 | `max_log_bytes` | `8388608` | rotate after this size |
@@ -261,8 +265,9 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 | `console_status_interval_ms` | `2000` | live console interval; `0` disables it |
 | `heartbeat_interval_ms` | `10000` | log heartbeat interval; `0` disables it |
 
-Log files rotate by prefix. Copy a log you want to retain out of `logs` before taking many
-further captures.
+Log files rotate by prefix. The regular profile uses `logs/`; the A/B profile uses
+`logs-ab/` and keeps up to 50 files, but still deletes the oldest captures. Copy
+historical logs into a different folder before taking many further captures.
 
 ## Build from source
 

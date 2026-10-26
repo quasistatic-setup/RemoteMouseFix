@@ -295,6 +295,9 @@ bool LoadConfig(const std::wstring& path, Config& cfg) {
         } else if (key == L"log_state_changes") {
             if (ParseBool(value, b)) cfg.logStateChanges = b;
             else cfg.warnings.push_back(L"log_state_changes is not a boolean: " + value);
+        } else if (key == L"trace_correction_timing") {
+            if (ParseBool(value, b)) cfg.traceCorrectionTiming = b;
+            else cfg.warnings.push_back(L"trace_correction_timing is not a boolean: " + value);
         } else if (key == L"console_status_interval_ms") {
             if (ParseU64(value, u) && u <= 60000) cfg.consoleStatusIntervalMs = static_cast<unsigned>(u);
             else cfg.warnings.push_back(L"console_status_interval_ms must be 0..60000: " + value);

@@ -222,7 +222,7 @@ With absolute correction active and WoW holding the hidden cursor, the message l
 one aggregated `## TIMING` line approximately every 250 ms:
 
 ```text
-## TIMING qpc_ms=81234567 window_ms=256 ticks=16 max_timer_gap_ms=19 input=14 apply=13 skip=no_anchor:0,cursor:0,off_anchor:2,empty:1 pending=(+10,+0) pending_age_ms=87 input_age_ms=12 anchor_delta=(+5,+0) anchor=(803,554) cursor=(808,554)
+## TIMING qpc_ms=81234567 window_ms=256 ticks=16 max_timer_gap_ms=19 input=14 apply=13 skip=no_anchor:0,cursor:0,off_anchor:2,empty:1 pending=(10,0) pending_age_ms=87 input_age_ms=12 anchor_delta=(5,0) anchor=(803,554) cursor=(808,554)
 ```
 
 - `qpc_ms` uses the same system clock as `APPLY qpc_ms`; `window_ms` is elapsed

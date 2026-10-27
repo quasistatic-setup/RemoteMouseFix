@@ -25,11 +25,12 @@ correction is still experimental.
   Recheck each hold and correction-mode change, keep the 16ms timer unchanged.
   Regression cases cover no-warp, false-stable cursor and true warp evidence.
 
-- Relearn a relocated game warp anchor *during* a hidden-cursor hold only
-  after an onset warp-like transition and a strong 12-sample stable consensus.
-  On significant anchor changes, discard queued smoothing movement from the
-  old coordinate system rather than replay stale camera motion.
-- Add a bounded recent-anchor consensus regression test (also run in CI).
+- Relearn a relocated game warp anchor only after repeated unexplained
+  recenter events; do not trust the former onset-jump/stable-sample shortcut.
+  On significant relocation, discard queued smoothing movement from the
+  old coordinate system. Revoke the warp gate after 300 ms of sustained
+  off-anchor readings to avoid indefinite suppression.
+- Add no-warp and recenter-evidence regressions (run in CI).
 
 ### Added
 

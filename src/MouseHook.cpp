@@ -106,6 +106,16 @@ LRESULT CALLBACK MouseHook::HookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     // position is the anchor, not the remote pointer, and would fake a delta.
     if (kind == EventKind::Move && injected && !own) {
         if (mode != CorrectionMode::Off && cursorHidden) {
+            // Observe all remote input BEFORE deciding to withhold it. Until a
+            // genuine recenter is established the event must reach the game.
+            filter.remoteVersion.fetch_add(1, std::memory_order_seq_cst); // odd
+            filter.remoteX.store(info->pt.x, std::memory_order_seq_cst);
+            filter.remoteY.store(info->pt.y, std::memory_order_seq_cst);
+            filter.remoteMs.store(GetTickCount64(), std::memory_order_seq_cst);
+            filter.remoteVersion.fetch_add(1, std::memory_order_seq_cst); // even
+        }
+        if (mode != CorrectionMode::Off && cursorHidden &&
+            filter.warpVerified.load(std::memory_order_acquire)) {
             if (g_tracking.valid) {
                 remoteDx = info->pt.x - g_tracking.last.x;
                 remoteDy = info->pt.y - g_tracking.last.y;

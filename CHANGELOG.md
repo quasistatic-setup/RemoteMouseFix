@@ -7,6 +7,19 @@ correction is still experimental.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `trace_correction_timing`, which logs one aggregated `## TIMING` line about every
+  250 ms while `absolute` correction is active and the game holds the cursor: timer gaps,
+  incoming remote deltas, output steps, pending movement and its age, and why a timer cycle
+  emitted nothing (anchor not learned, cursor read failed, cursor off the anchor). It is off
+  by default and on in the A/B profile only; the mouse hook does no extra work.
+
+### Changed
+
+- The A/B profile writes to `logs-ab\` instead of `logs\` and keeps up to 50 files, so test
+  captures no longer rotate gameplay logs away.
+
 ## [0.7.0] - 2026-09-21
 
 ### Added

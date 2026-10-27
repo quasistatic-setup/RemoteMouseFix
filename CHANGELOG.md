@@ -9,6 +9,12 @@ correction is still experimental.
 
 ### Added
 
+- A/B profile enables the optional 250 ms `## TIMING` summary for incoming deltas,
+  timer gaps, blocked anchor gates and queued movement. Normal playing remains unchanged.
+- A/B diagnostic logs are isolated in `logs-ab/` with up to 50 retained files;
+  game logs remain in `logs/`. Back up original captures outside rotating folders.
+
+
 - MouseLookProbe now provides visible/no-warp, hidden/no-warp and hidden/warp
   modes to distinguish cursor hiding from cursor repositioning. The original
   hidden/warp mode remains the default for automated regression testing.

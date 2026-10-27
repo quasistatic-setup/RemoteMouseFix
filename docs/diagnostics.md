@@ -99,9 +99,11 @@ events, which is why it is polled:
 - `cursor=HIDDEN` / `SHOWN` bracket the phase in which the game holds the mouse. The
   game's cursor warp itself uses `SetCursorPos` and is **invisible** in the event stream;
   it shows up only as `cursor_at` here.
-- `anchor-learned` is written when a hidden phase ends and one cursor position clearly
-  dominated its samples (at least 5 hits and 20%). The anchor is stored as a client offset,
-  so it follows the window when it moves.
+- `warp-evidence confirmed` requires repeated unexplained away-then-back
+  cursor motion correlated with distinct remote input events. Only then is
+  `anchor-learned` written and mouse-move suppression armed for that hidden
+  phase. The anchor is stored as a client offset, so it follows the window.
+  Without evidence, remote events pass through unchanged.
 - `clip=CONFINED` means `ClipCursor` is active. WoW 3.3.5a does not use it.
 - `focus-left-target` names the new foreground process. No input from it is recorded.
 

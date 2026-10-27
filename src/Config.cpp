@@ -242,7 +242,10 @@ bool LoadConfig(const std::wstring& path, Config& cfg) {
         std::uint64_t u = 0;
         int           i = 0;
 
-        if (key == L"target_process") {
+        if (key == L"target_ini_section") {
+            if (value == L"AB-Test" || value == L"Playing") cfg.targetIniSection = value;
+            else cfg.warnings.push_back(L"invalid target_ini_section (expected AB-Test or Playing): " + value);
+        } else if (key == L"target_process") {
             if (value.empty()) {
                 cfg.warnings.push_back(L"target_process is empty, keeping " + cfg.targetProcess);
             } else {
@@ -254,6 +257,9 @@ bool LoadConfig(const std::wstring& path, Config& cfg) {
         } else if (key == L"log_mouse_moves") {
             if (ParseBool(value, b)) cfg.logMouseMoves = b;
             else cfg.warnings.push_back(L"log_mouse_moves is not a boolean: " + value);
+        } else if (key == L"show_ab_test_ui") {
+            if (ParseBool(value, b)) cfg.showAbTestUi = b;
+            else cfg.warnings.push_back(L"show_ab_test_ui is not a boolean: " + value);
         } else if (key == L"log_directory") {
             cfg.logDirectory = value;
         } else if (key == L"log_file_prefix") {
@@ -295,6 +301,12 @@ bool LoadConfig(const std::wstring& path, Config& cfg) {
         } else if (key == L"log_state_changes") {
             if (ParseBool(value, b)) cfg.logStateChanges = b;
             else cfg.warnings.push_back(L"log_state_changes is not a boolean: " + value);
+        } else if (key == L"trace_correction_timing") {
+            if (ParseBool(value, b)) cfg.traceCorrectionTiming = b;
+            else cfg.warnings.push_back(L"trace_correction_timing is not a boolean: " + value);
+        } else if (key == L"high_res_smoothing_timer") {
+            if (ParseBool(value, b)) cfg.highResSmoothingTimer = b;
+            else cfg.warnings.push_back(L"high_res_smoothing_timer is not a boolean: " + value);
         } else if (key == L"console_status_interval_ms") {
             if (ParseU64(value, u) && u <= 60000) cfg.consoleStatusIntervalMs = static_cast<unsigned>(u);
             else cfg.warnings.push_back(L"console_status_interval_ms must be 0..60000: " + value);

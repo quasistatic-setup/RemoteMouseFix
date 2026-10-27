@@ -17,6 +17,9 @@ struct Config {
     // false: correction modes become available; the tool still starts with correction_mode.
     bool         diagnosticMode = true;
     bool         logMouseMoves  = true;       // false logs buttons/wheel/state only
+    bool         showAbTestUi   = false;      // only affects the status panel; no input changes
+    std::wstring targetIniSection;            // AB-Test or Playing; empty = use JSON target
+    std::wstring targetPath;                  // optional exact image path (not just basename)
 
     // --- correction (only effective with diagnostic_mode = false) ---
     CorrectionMode correctionMode          = CorrectionMode::Off; // mode at startup
@@ -36,6 +39,8 @@ struct Config {
     int      anchorTolerancePx       = 3;     // real move this close to the learned anchor => ANCHOR
     unsigned statePollIntervalMs     = 10;    // cursor visibility / clip / anchor sampling period
     bool     logStateChanges         = true;
+    bool     traceCorrectionTiming   = false; // opt-in timing trace for A/B tests
+    bool     highResSmoothingTimer   = false; // opt-in; default Windows WM_TIMER clock
     unsigned consoleStatusIntervalMs = 2000;  // 0 disables the live console status line
     unsigned heartbeatIntervalMs     = 10000; // periodic liveness line, 0 disables it
 

@@ -41,6 +41,8 @@ struct StatusSnapshot {
     GameState      game              = GameState::NotRunning;
     bool           loggingPaused     = false;
     bool           correctionAllowed = false;
+    bool           abTestUi          = false;
+    unsigned       markers           = 0;
     CorrectionMode mode              = CorrectionMode::Off;
 
     // Plain-language reason why no correction can run at all this session, e.g. the

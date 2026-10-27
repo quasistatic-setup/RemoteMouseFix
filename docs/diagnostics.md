@@ -210,3 +210,160 @@ delta. `own seen` should track `applied` closely in both correction modes.
   mode the `OWN` position must equal `target`. In `relative` mode the `OWN` move's offset
   from the anchor (`anc=`) shows what pointer speed and acceleration made of `rd`;
   comparing the two measures the acceleration distortion directly.
+
+## MouseLookProbe three-mode comparison
+
+Select a radio button in `MouseLookProbe.exe` before holding the mouse button:
+A = visible cursor with no `SetCursorPos`, B = hidden cursor without
+`SetCursorPos`, C = hidden cursor with repeated `SetCursorPos` to an
+off-centre anchor. C remains the old/default behavior.
+
+Perform comparable short drags over TeamViewer and release between modes.
+In A/B the pointer can reach the screen edge. The probe records the
+`mode=visible|hidden|warp` in each `LOOK-START` and `PHASE` line, plus a
+`MODE` line on every selection change. Idle samples alone do not prove that
+the operator continued moving their mouse.
+
+First run the probe without RemoteMouseFix correcting it. If later capturing
+low-level input timing with RemoteMouseFix, set `Executable=MouseLookProbe.exe` under `[AB-Test]` in `RemoteMouseFix.ini`
+and use an isolated log folder when preserving historical traces. This test compares cursor behavior; it does not establish that the
+probe matches every detail of WoW's mouse input.
+
+### Selecting a target for A/B or normal playing
+
+Edit `RemoteMouseFix.ini` beside `RemoteMouseFix.exe`:
+
+```ini
+[AB-Test]
+Executable=MouseLookProbe.exe
+
+[Playing]
+Executable=D:\Games\MyGame\Game.exe
+```
+
+Both sections ship with `Wow.exe` by default. `Start-AB-Test.cmd` uses
+`[AB-Test]`, and `Start-Playing.cmd` uses `[Playing]`. A bare executable
+filename matches the corresponding running process wherever it was installed.
+A full absolute Windows image path (with or without enclosing quotes) matches only that specific installation
+and prevents accidental cross-matching of similarly named games. The app does
+**not launch** the selected EXE. No user prompt or JSON editing is required.
+Missing/invalid INI fails safely before the mouse hook starts.
+The diagnostic-only profile continues using its JSON target, and existing
+foreground, hidden-cursor, injected-move-only and emergency-off checks remain.
+
+The name/path lookup is done in process enumeration and the PID cache,
+not in the low-level hook, which continues to rely on a prevalidated foreground PID.
+
+## Opt-in timing trace for intermittent camera stalls
+
+The `Start-AB-Test.cmd` profile now sets `trace_correction_timing=true` and writes to
+`logs-ab/` beside the executable (separate from the ordinary `logs/` gameplay
+directory). The normal gameplay and diagnostic-only profiles leave this trace off.
+`diagnostic_mode=true` is **not** the way to enable it: that setting locks all correction.
+
+With absolute correction active and the selected target holding the hidden cursor, the message loop writes
+one aggregated `## TIMING` line approximately every 250 ms:
+
+```text
+## TIMING qpc_ms=81234567 window_ms=256 ticks=16 max_timer_gap_ms=19 input=14 apply=13 skip=no_anchor:0,cursor:0,off_anchor:2,empty:1 pending=(10,0) pending_age_ms=87 input_age_ms=12 anchor_delta=(5,0) anchor=(803,554) cursor=(808,554)
+```
+
+- `qpc_ms` uses the same system clock as `APPLY qpc_ms`; `window_ms` is elapsed
+  time since the previous summary. These are diagnostics, **not frame times**.
+- `ticks` counts received `WM_TIMER` callbacks, and `max_timer_gap_ms` is the
+  largest gap between consecutive callbacks in that window (including message-loop delays).
+- `input` counts remote deltas posted by the hook to the message loop. Cross-reference
+  `DROP` events and their QPC timestamps in the same trace to distinguish missing
+  TeamViewer input from delayed processing.
+- `apply` counts attempted output steps; successes/failures are in `APPLY` lines.
+- `skip` counts timer cycles unable to emit because the anchor was not yet learned,
+  `GetCursorPos` failed, the cursor was outside the configured anchor tolerance,
+  or the final check had no movement pending. Anchor-related counts only include cycles with queued movement.
+- `pending` is the unsent horizontal/vertical delta. `pending_age_ms` measures how long
+  movement has stayed continuously queued (an estimate of age, not the oldest pixel's age).
+  `input_age_ms` is the time since the last processed remote delta, or -1 before the
+  first observed delta in a held-cursor phase.
+- `anchor_delta` is the last observed offset from the learned anchor; `anchor` and
+  `cursor` are the last measured screen coordinates. These values are from the last
+  timer check, not necessarily the same instant as the summary.
+
+No new logging takes place inside the mouse hook. The trace is a sampled aggregate,
+not proof that the target consumed each injected move. Do not infer a cause merely from the
+counts; compare them around visible stalls against `DROP`, `APPLY` and `OWN`.
+
+For a practical WoW test: start `Start-AB-Test.cmd`, leave `absolute` correction on,
+mark the beginning with `Ctrl+Alt+M`, hold right-click and rotate slowly for 20–30 s
+through several pauses, then quit with `Ctrl+Alt+Q`. Optionally mark and record a
+short `off` reference with `Ctrl+Alt+C`; expect camera jumps without the fix.
+Do not alter the smoothing or anchor tolerance for the measurement.
+
+**Keep historical evidence outside the rotating directory.** The A/B profile keeps up
+to 50 files of 8 MiB in `logs-ab/` and still deletes the oldest matching files.
+Before repeating tests, copy important captures into a separate folder that does not
+contain the `remotemousefix-*.log` rotation target. Preserve the raw timestamps, and
+do not commit session logs to Git.
+
+## Anchor-recovery experiment (follow-up PR)
+
+When an existing anchor is wrong after the game window moves or changes its
+recenter position, the old implementation continues suppressing input and cannot
+emit a camera step until the hold ends. The guarded recovery path looks for
+**both** a cursor jump of at least 30 px when the game hides the cursor and a
+stable location in recent (up to 12) state samples: at least eight identical
+screen positions and at least 75% agreement. This reduces the risk of learning
+a random remote mouse location; a stable cursor position alone is not proof of
+recentring. If there is insufficient evidence, output still stays blocked
+rather than guessing.
+
+A sample matching the most recent successful `SendInput` target (within
+2 px) is never admitted to the recent-anchor consensus. Observations during
+the first 160 ms after an own output are also quarantined, and any new
+own output clears the in-progress sample window. At the end of a hold, an
+estimate collected alongside own correction output is not allowed to replace
+an already valid anchor. These checks address a captured false relocation
+exactly 20 px from the real anchor (`kSmoothMaxStepPx`), which was followed
+by a stale-pending reset. A repeated synthetic point is not game warp proof.
+
+A successful recovery logs `## STATE anchor-relearned during hold` followed by
+`anchor-learned`. Any remaining smoothing movement queued for the previous
+anchor is dropped on the main message-loop thread with
+`## SMOOTH RESET reason=anchor-relearned` to prevent a large delayed jump.
+No output is sent from the state sampler and the hook's safety gates are
+unchanged.
+
+Windows regression: with TeamViewer and the A/B profile targeting Wow.exe,
+rotate the camera, move the WoW window while the cursor is visible, then drag
+again with the fix ON. An incorrect anchor must recover inside the new hold,
+without a multi-second `off_anchor` run or a burst of old queued motion.
+Repeat without moving the window. Probe A/B/C, relative and OFF modes,
+hotkey emergency-off and loss of focus must still behave correctly.
+**MSVC/CTest alone does not establish runtime safety or mouse-look quality.**
+
+## High-resolution smoothing A/B experiment (follow-up PR)
+
+The original `SetTimer(..., 16, ...)` often delivered a 27 ms average tick in
+the WoW capture. With `high_res_smoothing_timer=true`, the A/B profile instead
+uses a high-resolution Windows waitable timer and a dedicated waiter thread
+which posts at most one outstanding `WM_APP` timer notification to the main
+message loop. The mouse hook and all `SendInput` calls remain on the original
+thread. No process-wide timer-resolution changes, DLL injection or game hooks.
+
+A startup line identifies `## SMOOTH TIMER source=high-res-waitable` or
+`source=wm-timer`. If Windows cannot create or arm the high-resolution timer,
+the tool logs a warning and uses `WM_TIMER`. If an active high-resolution
+timer fails or cannot post to the original thread, the application shuts down
+without silently leaving suppressed movements uncorrected.
+
+In the same WoW/TeamViewer scenario, compare `## TIMING` tick counts,
+`max_timer_gap_ms`, pending age and perceived camera smoothness with
+`high_res_smoothing_timer=true` versus `false`. Especially verify
+`Ctrl+Alt+C`, focus loss, multiple modes, `own==applied`, no `queue drops`
+or watchdog trips. Hardware, scheduling and game frame rate can still impose
+limits: a 16 ms requested timer does not guarantee 16 ms output or cure
+the input-side 500 ms pauses. The A/B tests of 27 October 2026 showed a
+measured interval of about 16.2 ms versus 26.7 ms with WM_TIMER, with subjective
+improvement and no failed or missing SendInput echoes. Therefore the Playing
+profile also enables this timer by default; disable
+`high_res_smoothing_timer` in `config-play.json` to revert to WM_TIMER.
+The new Playing default still requires an ordinary-playing smoke test on
+Windows/TeamViewer before merging this PR.

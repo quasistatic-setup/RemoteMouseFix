@@ -48,7 +48,8 @@ in a folder of its own:
   README.md  LICENSE
   config/                 the three profiles
   docs/                   diagnostic reference
-  logs/                   created on the first start
+  logs/                   created by Start-Playing.cmd
+  logs-ab/                created by Start-AB-Test.cmd
 ```
 
 ### Windows warnings on first start
@@ -79,27 +80,64 @@ colour repeats the answer: green means working, yellow means waiting for you, re
 the fix stopped itself.
 
 ```text
-  GAME  *  Wow.exe is in front
+  TARGET *  Wow.exe is in front
   FIX   *  on (absolute) - correcting the pointer
   WORK     20 jumps seen, 51 corrections applied
+  MARK  #2  Ctrl+Alt+M = mark the start of a test section in the log
   NEXT  >  Everything is working. Ctrl+Alt+C switches the fix off at any time.
-  KEYS     Ctrl+Alt+1 fix on | Ctrl+Alt+C fix off | Ctrl+Alt+P pause log | Ctrl+Alt+Q quit
+  MODES    Ctrl+Alt+1 absolute | Ctrl+Alt+2 relative | Ctrl+Alt+C OFF
+  KEYS     Ctrl+Alt+M MARK | Ctrl+Alt+P pause log | Ctrl+Alt+Q quit
 ```
 
-`GAME` is yellow while the game is not running or while another window is in front: the
-fix only works on the window you are actually playing in, so clicking into the game is
-what turns this line green. `FIX` turns red when a watchdog switched the correction off,
+`TARGET` in A/B mode (or `GAME` in the normal profile) is yellow while the
+selected executable is not running or another window is in front. The fix only
+works while that target window is in the foreground, so switching to it turns
+the line green. `FIX` turns red when a watchdog switched the correction off,
 and then says why; that state stays on screen instead of scrolling away. `NEXT` always
 names the one thing to do next.
 
 Set `NO_COLOR=1` for a monochrome panel. When the output is redirected to a file, the
 panel is printed once per change instead of being repainted.
 
+Both launchers read their own section of `RemoteMouseFix.ini` next to
+`RemoteMouseFix.exe`:
+
+```ini
+[AB-Test]
+Executable=MouseLookProbe.exe
+
+[Playing]
+Executable=C:\Games\World of Warcraft\Wow.exe
+```
+
+Use `Executable=Wow.exe` to match any running game process with that filename,
+**regardless of its installation directory**. Alternatively supply a full
+absolute Windows path to match **only that exact executable installation**.
+Spaces in the path are supported. Enclosing the whole value in double quotes is optional;
+Windows removes them when reading the INI. Your runtime test confirmed both forms.
+Change the INI while the tool is stopped, save, and start the desired
+`Start-AB-Test.cmd` or `Start-Playing.cmd` launcher as usual. No startup
+question or JSON edit is needed. The shipped file uses `Wow.exe` for both
+sections, and the settings persist across sessions.
+
+RemoteMouseFix **does not launch a game**. The path selects the process to
+monitor and correct when the game is already running and in the foreground.
+The selected target is shown as `TARGET` in A/B mode (or `GAME` in the
+regular playing display). A missing INI or invalid target fails closed
+before correction starts. The diagnostic-only profile remains unchanged.
+
+The A/B profile additionally shows the number of markers written so far and all
+test hotkeys. Each press of `Ctrl+Alt+M` creates the next numbered `## MARKER #N`
+entry. Keep a short note of what each marker represents; a marker identifies a
+section boundary, not its meaning. An immediate notice confirms each marker.
+
 ### Controls
 
 | Hotkey | Effect |
 | --- | --- |
 | `Ctrl+Alt+C` | switch the correction off immediately |
+| `Ctrl+Alt+M` | add a numbered marker to the log |
+| `Ctrl+Alt+P` | pause/resume logging (correction continues) |
 | `Ctrl+Alt+1` | enable the recommended `absolute` correction |
 | `Ctrl+Alt+2` | enable the alternative `relative` correction |
 | `Ctrl+Alt+Q` | quit RemoteMouseFix cleanly |
@@ -126,13 +164,19 @@ can still add latency.
 
 ## Report a problem or test another setup
 
-The A/B profile records detailed mouse movement for comparison. It never records keyboard
-input or text, and it has no upload or network feature. You decide whether to share a log.
+The A/B profile records detailed mouse movement and opt-in 250 ms timing summaries
+(`## TIMING`) to distinguish missing remote input, irregular timers and
+unsent movement gated by the cursor anchor. Test logs are written to `logs-ab/`
+separately from normal-play `logs/`; up to 50 files are retained, but the
+oldest still rotate out. Copy important captures into an archive outside the
+rotating folders. The tool never records keyboard input or text, and it has no
+upload or network feature. You decide whether to share a log.
 
 1. Start the game and move to a quiet, safe location.
 2. Double-click `Start-AB-Test.cmd` from the RemoteMouseFix folder.
-3. Confirm that the console names `config-ab-test.json` and that the panel shows
-   `FIX` on with `absolute`, and `GAME` turning green when you click into the game.
+3. Confirm that the console names `config-ab-test.json`, that `TARGET` shows
+   the executable from `[AB-Test]` in `RemoteMouseFix.ini`, and that `FIX` is on with `absolute`.
+   `TARGET` turns green when you click into the chosen application.
 4. Test the same actions in each mode: `absolute`, `off`, then `relative`.
    Use `Ctrl+Alt+1`, `Ctrl+Alt+C` and `Ctrl+Alt+2` to select the modes.
 5. Before every action, press `Ctrl+Alt+M` to add a marker to the log:
@@ -141,7 +185,7 @@ input or text, and it has no upload or network feature. You decide whether to sh
    - hold the left mouse button and drag slowly.
 6. Note for each mode whether the camera is smooth, jumps, or moves too fast or too slowly.
 7. Press `Ctrl+Alt+C`, then `Ctrl+Alt+Q`.
-8. Open the newest file in `logs` and check that its final lines report `queue drops 0`
+8. Open the newest file in `logs-ab` and check that its final lines report `queue drops 0`
    and `watchdog trips 0`.
 9. ZIP that log and attach it to a
    [GitHub issue](https://github.com/quasistatic-setup/RemoteMouseFix/issues/new) together
@@ -242,13 +286,16 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 
 | Key | Built-in default | Meaning |
 | --- | --- | --- |
-| `target_process` | `Wow.exe` | executable to observe, matched case-insensitively |
+| `target_process` | `Wow.exe` | fallback target name; the A/B and Playing profiles select their executable from `RemoteMouseFix.ini` |
+| `target_ini_section` | empty | `AB-Test` or `Playing` enables that named section in `RemoteMouseFix.ini` for a name or full-path match |
 | `diagnostic_mode` | `true` | `true` prevents all correction; `false` permits correction modes |
 | `correction_mode` | `off` | startup mode: `off`, `absolute` or `relative` |
 | `watchdog_max_hidden_ms` | `180000` | hidden cursor duration before correction is disabled; `0` disables this check |
 | `watchdog_max_unechoed` | `50` | own events allowed outstanding before the echo watchdog trips |
 | `watchdog_max_output_failures` | `5` | consecutive failed output calls before the watchdog trips |
 | `log_mouse_moves` | `true` | `false` records buttons, wheel and state only |
+| `trace_correction_timing` | `false` | opt-in 250 ms timer/anchor/pending-delta summaries; enabled in A/B profile |
+| `high_res_smoothing_timer` | `false` | high-resolution waitable clock for 16 ms smoothing; enabled in both A/B and Playing profiles after successful A/B field tests; optional to disable |
 | `log_directory` | `logs` | relative paths resolve beside the EXE |
 | `log_file_prefix` | `remotemousefix` | log filename prefix |
 | `max_log_bytes` | `8388608` | rotate after this size |
@@ -261,8 +308,9 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 | `console_status_interval_ms` | `2000` | live console interval; `0` disables it |
 | `heartbeat_interval_ms` | `10000` | log heartbeat interval; `0` disables it |
 
-Log files rotate by prefix. Copy a log you want to retain out of `logs` before taking many
-further captures.
+Log files rotate by prefix. The A/B profile uses `logs-ab/` (50 files maximum) and
+normal playing uses `logs/` (5 files maximum). Copy any log you wish to preserve
+into another folder before taking more captures.
 
 ## Build from source
 
@@ -306,9 +354,26 @@ kind of input this check sends, so its filter, not the system, would decide the 
 
 ## Developer test with MouseLookProbe
 
-`MouseLookProbe.exe` reproduces the measured mouse-look mechanism without the game. It
-hides the cursor on a button press, warps it to an off-centre anchor and records the summed
-movement of each phase in `mouselook-probe.log`.
+`MouseLookProbe.exe` has three selectable experiment modes to isolate why
+TeamViewer pauses during mouse-look. The original hidden-cursor + warp behavior
+remains the default, including for the automated script.
+
+| Probe mode | Cursor | Repeated `SetCursorPos` | Purpose |
+| --- | --- | --- | --- |
+| A – visible / no warp | visible | no | character-selection-like baseline |
+| B – hidden / no warp | hidden | no | isolate cursor hiding |
+| C – hidden + warp | hidden | yes | original WoW-like mouse-look simulation |
+
+Choose a radio button in the probe window before dragging. Hold the left or right
+mouse button in the empty area, then release before switching modes. Modes A/B use
+ordinary `GetCursorPos` deltas, so keep drags short to avoid the screen edge.
+Each phase records its selected mode in `mouselook-probe.log`. The optional
+`--mode visible|hidden|warp` selects the initial mode; `warp` is the default.
+
+Test A, B and C via TeamViewer first **without RemoteMouseFix targeting the probe**.
+Pauses only in C suggest repeated cursor repositioning; pauses in B and C suggest
+that hiding the cursor contributes. These are indicators rather than proof of
+WoW behavior: the probe is only an approximation of the game's input loop.
 
 [tools/probe/emulate-remote.ps1](tools/probe/emulate-remote.ps1) starts both programs,
 injects a TeamViewer-shaped absolute stream and runs a click without motion, a steady drag

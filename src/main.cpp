@@ -26,6 +26,7 @@
 #include "rmf/Logger.h"
 #include "rmf/MouseHook.h"
 #include "rmf/ProcessInfo.h"
+#include "rmf/RecentWarpAnchor.h"
 #include "rmf/StateSampler.h"
 #include "rmf/StatusView.h"
 #include "rmf/WinCompat.h"
@@ -41,6 +42,7 @@
 #include <cwchar>
 #include <memory>
 #include <mutex>
+#include <system_error>
 #include <string>
 #include <thread>
 #include <vector>
@@ -74,6 +76,7 @@ constexpr HotkeySpec kHotkeys[] = {
 
 constexpr UINT kMsgQuitRequested = WM_APP + 1;
 constexpr UINT kMsgApplyDelta    = WM_APP + 2; // posted by the hook: wParam = dx, lParam = dy
+constexpr UINT kMsgSmoothTick    = WM_APP + 3; // coalesced high-res timer tick, main thread only
 constexpr UINT_PTR kSmoothTimer  = 1;
 constexpr UINT kSmoothIntervalMs = 16;
 constexpr long kSmoothMaxStepPx  = 20;
@@ -219,7 +222,8 @@ int main() {
                 if (arg == L"--help" || arg == L"-h" || arg == L"/?") {
                     ConsoleOut(L"RemoteMouseFix %ls - diagnostics with optional correction\n\n"
                                L"Usage: RemoteMouseFix.exe [path\\to\\config.json] [--seconds N]\n\n"
-                               L"  --seconds N  stop automatically after N seconds (0 = run until stopped)\n\n"
+                               L"  --seconds N  stop automatically after N seconds (0 = run until stopped)\n"
+                               L"  A/B and Playing targets are read from RemoteMouseFix.ini.\n\n"
                                L"Hotkeys while running:\n"
                                L"  Ctrl+Alt+M   write a marker line into the log\n"
                                L"  Ctrl+Alt+P   pause / resume logging (correction keeps running)\n"
@@ -260,6 +264,73 @@ int main() {
 
     rmf::Config cfg;
     rmf::LoadConfig(configPath, cfg);
+
+    // Each gameplay profile opts into its own section of the common INI. A full
+    // path is matched against the running process image, not used to launch it.
+    // Missing/invalid INI fails closed before installing a mouse hook.
+    if (!cfg.targetIniSection.empty()) {
+        const std::wstring iniPath = rmf::ResolveAgainstExeDir(L"RemoteMouseFix.ini");
+        if (!FileExists(iniPath)) {
+            ConsoleOut(L"ERROR: RemoteMouseFix.ini is missing beside RemoteMouseFix.exe.\n"
+                       L"       Restore it from the package; no correction started.\n");
+            return 2;
+        }
+        wchar_t selected[32768] {};
+        const DWORD len = GetPrivateProfileStringW(cfg.targetIniSection.c_str(),
+            L"Executable", L"", selected, 32768, iniPath.c_str());
+        const std::wstring target(selected, static_cast<std::size_t>(len));
+        if (target.empty() || len >= 32767) {
+            ConsoleOut(L"ERROR: [%ls] Executable in RemoteMouseFix.ini is missing or too long.\n",
+                       cfg.targetIniSection.c_str());
+            return 2;
+        }
+        const bool invalidCharacters = std::any_of(target.begin(), target.end(), [](wchar_t ch) {
+            return ch < 32 || ch == L'<' || ch == L'>' || ch == L'"' ||
+                   ch == L'|' || ch == L'?' || ch == L'*';
+        });
+        const bool hasPathSeparator = target.find_first_of(L"\\/") != std::wstring::npos;
+        const bool absoluteDrivePath =
+            target.size() >= 6 && ((target[0] >= L'A' && target[0] <= L'Z') ||
+                                     (target[0] >= L'a' && target[0] <= L'z')) &&
+            target[1] == L':' && (target[2] == L'\\' || target[2] == L'/');
+        const bool uncPath = target.size() >= 7 &&
+            (target[0] == L'\\' || target[0] == L'/') &&
+            (target[1] == L'\\' || target[1] == L'/');
+        const bool hasPath = hasPathSeparator || target.find(L':') != std::wstring::npos;
+        if (invalidCharacters || target.front() == L' ' || target.back() == L' ' ||
+            (hasPath && !(absoluteDrivePath || uncPath)) || target.back() == L'\\' ||
+            target.back() == L'/') {
+            ConsoleOut(L"ERROR: invalid [%ls] Executable in RemoteMouseFix.ini.\n"
+                       L"       Use Name.exe or a full absolute path such as C:\\Games\\MyGame.exe.\n",
+                       cfg.targetIniSection.c_str());
+            return 2;
+        }
+        std::wstring filename = target;
+        if (hasPath) {
+            // Normalize relative components such as ".." in a configured absolute path.
+            std::wstring expanded(32768, L'\0');
+            const DWORD size = GetFullPathNameW(target.c_str(),
+                static_cast<DWORD>(expanded.size()), expanded.data(), nullptr);
+            if (size == 0 || size >= expanded.size()) {
+                ConsoleOut(L"ERROR: cannot resolve target path in RemoteMouseFix.ini.\n");
+                return 2;
+            }
+            expanded.resize(size);
+            std::replace(expanded.begin(), expanded.end(), L'/', L'\\');
+            cfg.targetPath = std::move(expanded);
+            filename = cfg.targetPath.substr(cfg.targetPath.find_last_of(L"\\/") + 1);
+        }
+        if (filename.size() < 5 ||
+            CompareStringOrdinal(filename.c_str() + filename.size() - 4, 4,
+                                 L".exe", 4, TRUE) != CSTR_EQUAL ||
+            filename.find_first_of(L":\\/") != std::wstring::npos) {
+            ConsoleOut(L"ERROR: [%ls] target must end with an .exe filename.\n",
+                       cfg.targetIniSection.c_str());
+            return 2;
+        }
+        cfg.targetProcess = filename;
+        ConsoleOut(L"  target from [%ls]: %ls\n", cfg.targetIniSection.c_str(), target.c_str());
+    }
 
     SetConsoleTitleW(cfg.diagnosticMode
                          ? L"RemoteMouseFix " RMF_VERSION_W L" - DIAGNOSTIC ONLY"
@@ -345,7 +416,9 @@ int main() {
         header.push_back(L"# elevated       : " + std::wstring(elevated ? L"yes" : L"no"));
         header.push_back(L"# config file    : " + (cfg.loadedFrom.empty() ? L"<defaults>" : cfg.loadedFrom));
         header.push_back(L"# target process : " + cfg.targetProcess);
+        if (!cfg.targetPath.empty()) header.push_back(L"# target image   : " + cfg.targetPath);
         header.push_back(L"# log mouse moves: " + std::wstring(cfg.logMouseMoves ? L"yes" : L"no"));
+        header.push_back(L"# A/B panel      : " + std::wstring(cfg.showAbTestUi ? L"on" : L"off"));
         header.push_back(L"# diagnostic mode: " + std::wstring(cfg.diagnosticMode ? L"yes" : L"no"));
         header.push_back(L"# correction     : " +
                          (correction.allowed
@@ -358,6 +431,8 @@ int main() {
                                 cfg.jumpThresholdPx, cfg.anchorTolerancePx, cfg.statePollIntervalMs));
         header.push_back(Format(L"# smoothing      : absolute only, interval=%ums max_step=%ldpx",
                                 kSmoothIntervalMs, kSmoothMaxStepPx));
+        header.push_back(L"# timing trace   : " +
+                         std::wstring(cfg.traceCorrectionTiming ? L"on (250ms windows)" : L"off"));
         header.push_back(Format(L"# heartbeat      : every %u ms (0 = off)", cfg.heartbeatIntervalMs));
         header.push_back(Format(L"# rotation       : %llu bytes, keep %u files",
                                 static_cast<unsigned long long>(cfg.maxLogBytes), cfg.maxLogFiles));
@@ -397,6 +472,7 @@ int main() {
     }
 
     ConsoleOut(L"  target process : %ls\n", cfg.targetProcess.c_str());
+    if (!cfg.targetPath.empty()) ConsoleOut(L"  target image   : %ls\n", cfg.targetPath.c_str());
     ConsoleOut(L"  config file    : %ls\n",
                cfg.loadedFrom.empty() ? L"<defaults>" : cfg.loadedFrom.c_str());
     ConsoleOut(L"  run profile    : %ls\n",
@@ -418,8 +494,9 @@ int main() {
         rmf::StatusSnapshot initial;
         initial.targetProcess     = cfg.targetProcess;
         initial.correctionAllowed = correction.allowed;
+        initial.abTestUi          = cfg.showAbTestUi;
         initial.lockReason        = lockHint;
-        initial.game              = rmf::IsProcessRunning(cfg.targetProcess)
+        initial.game              = rmf::IsProcessRunning(cfg.targetProcess, cfg.targetPath)
                                         ? rmf::GameState::Background
                                         : rmf::GameState::NotRunning;
         panel.Start(cfg.consoleStatusIntervalMs > 0, initial);
@@ -452,12 +529,25 @@ int main() {
     };
 
     // ---- state sampler -----------------------------------------------------------------
-    rmf::ProcessNameCache samplerNames(cfg.targetProcess);
+    rmf::ProcessNameCache samplerNames(cfg.targetProcess, cfg.targetPath);
     std::atomic<bool> targetInForeground {false};
     std::atomic<bool> cursorHeldByTarget {false};
 
     // Sampler thread only.
     rmf::AnchorLearner anchorLearner;
+    rmf::RecentWarpAnchor recentAnchor;
+    // Relearning changes the reference for outstanding smoothing steps: main thread
+    // discards the stale backlog before emitting another corrected move.
+    std::atomic<std::uint32_t> anchorRevision {0};
+    // Published only after successful absolute SendInput. Used solely by the
+    // sampler to exclude our own cursor destinations from warp-anchor learning.
+    std::atomic<long> lastOwnTargetX {0};
+    std::atomic<long> lastOwnTargetY {0};
+    std::atomic<std::uint64_t> lastOwnOutputMs {0};
+    std::uint64_t ownCountAtHoldStart = 0; // sampler-thread only
+    bool          haveLastShownCursor = false;
+    POINT         lastShownCursor {0, 0};
+    bool          sawWarpAtHoldStart = false;
     bool          holdPhaseOpen    = false;
     RECT          holdPhaseClient  {0, 0, 0, 0};
     ULONGLONG     hiddenSince      = 0;
@@ -466,12 +556,19 @@ int main() {
     auto publishAnchor = [&](POINT anchor, unsigned hits, unsigned total, RECT client) {
         const long offsetX = anchor.x - client.left;
         const long offsetY = anchor.y - client.top;
-        const bool changed = !filter.anchorValid.load() ||
-                             filter.anchorOffsetX.load() != offsetX ||
-                             filter.anchorOffsetY.load() != offsetY;
-        filter.anchorOffsetX.store(offsetX);
-        filter.anchorOffsetY.store(offsetY);
-        filter.anchorValid.store(true);
+        const bool hadAnchor = filter.anchorValid.load(std::memory_order_relaxed);
+        const long previousX = filter.anchorOffsetX.load(std::memory_order_relaxed);
+        const long previousY = filter.anchorOffsetY.load(std::memory_order_relaxed);
+        const bool changed = !hadAnchor || previousX != offsetX || previousY != offsetY;
+        const bool relocated = hadAnchor &&
+            (std::labs(previousX - offsetX) > cfg.anchorTolerancePx ||
+             std::labs(previousY - offsetY) > cfg.anchorTolerancePx);
+        // Make the two coordinate stores appear as one valid anchor to the main loop.
+        filter.anchorValid.store(false, std::memory_order_release);
+        filter.anchorOffsetX.store(offsetX, std::memory_order_relaxed);
+        filter.anchorOffsetY.store(offsetY, std::memory_order_relaxed);
+        filter.anchorValid.store(true, std::memory_order_release);
+        if (relocated) anchorRevision.fetch_add(1, std::memory_order_release);
         if (changed && cfg.logStateChanges) {
             LogLine(Format(L"## STATE anchor-learned=(%ld,%ld) client_offset=(%ld,%ld) hits=%u/%u",
                            anchor.x, anchor.y, offsetX, offsetY, hits, total));
@@ -510,7 +607,23 @@ int main() {
             cursorHeldByTarget.store(holding, std::memory_order_relaxed);
 
             if (holding) {
+                // A warp-like discontinuity when the cursor becomes hidden is
+                // independent evidence of recentering. Stable positions alone are
+                // insufficient (Probe mode B can keep the cursor perfectly still).
+                if (!holdPhaseOpen) {
+                    recentAnchor.Reset();
+                    ownCountAtHoldStart = correction.applied.load(std::memory_order_acquire);
+                    sawWarpAtHoldStart = haveLastShownCursor &&
+                        (std::labs(now.cursorPos.x - lastShownCursor.x) >= 30 ||
+                         std::labs(now.cursorPos.y - lastShownCursor.y) >= 30);
+                }
                 const ULONGLONG tick = GetTickCount64();
+                const auto ownCount = correction.applied.load(std::memory_order_acquire);
+                const POINT lastOwnTarget {
+                    lastOwnTargetX.load(std::memory_order_relaxed),
+                    lastOwnTargetY.load(std::memory_order_relaxed)};
+                recentAnchor.Observe(now.cursorPos, ownCount, lastOwnTarget, tick,
+                                     lastOwnOutputMs.load(std::memory_order_acquire));
                 const std::uint32_t generation = correction.generation.load();
                 if (!holdPhaseOpen || generation != hiddenGeneration) {
                     // The watchdog clock starts with the hold, or with the latest mode
@@ -529,6 +642,33 @@ int main() {
                     publishAnchor(liveAnchor, liveHits, liveTotal, now.clientScreenRect);
                 }
 
+                // A previous game anchor can become stale after moving the window or
+                // changing the game's camera mode. Accept a NEW location only after
+                // both an onset warp and a strong, recent 12-sample consensus.
+                // No output is issued from this sampler thread.
+                POINT candidate {};
+                unsigned candidateHits = 0, candidateSamples = 0;
+                if (sawWarpAtHoldStart &&
+                    correction.Mode() == rmf::CorrectionMode::Absolute &&
+                    filter.anchorValid.load(std::memory_order_relaxed) &&
+                    recentAnchor.Stable(candidate, candidateHits, candidateSamples)) {
+                    const long expectedX = now.clientScreenRect.left +
+                        filter.anchorOffsetX.load(std::memory_order_relaxed);
+                    const long expectedY = now.clientScreenRect.top +
+                        filter.anchorOffsetY.load(std::memory_order_relaxed);
+                    if (std::labs(candidate.x - expectedX) > cfg.anchorTolerancePx ||
+                        std::labs(candidate.y - expectedY) > cfg.anchorTolerancePx) {
+                        if (cfg.logStateChanges) {
+                            LogLine(Format(
+                                L"## STATE anchor-relearned during hold: previous=(%ld,%ld) "
+                                L"candidate=(%ld,%ld) hits=%u/%u (warp transition observed)",
+                                expectedX, expectedY, candidate.x, candidate.y,
+                                candidateHits, candidateSamples));
+                        }
+                        publishAnchor(candidate, candidateHits, candidateSamples, now.clientScreenRect);
+                    }
+                }
+
                 if (cfg.watchdogMaxHiddenMs > 0 &&
                     correction.Mode() != rmf::CorrectionMode::Off &&
                     tick - hiddenSince > cfg.watchdogMaxHiddenMs) {
@@ -538,14 +678,32 @@ int main() {
                 return;
             }
 
+            if (targetInForeground.load(std::memory_order_relaxed) && now.cursorVisible) {
+                lastShownCursor = now.cursorPos;
+                haveLastShownCursor = true;
+            } else {
+                haveLastShownCursor = false;
+            }
             if (!holdPhaseOpen) {
                 return;
             }
             holdPhaseOpen = false;
+            sawWarpAtHoldStart = false;
+            recentAnchor.Reset();
 
             POINT anchor {};
             unsigned hits = 0, total = 0;
-            if (!anchorLearner.Finish(anchor, hits, total)) {
+            if (!anchorLearner.Finish(anchor, hits, total)) return;
+
+            // Whole-hold estimates include our own SendInput positions. When output
+            // happened in this hold, they MUST NOT overwrite a learned game anchor
+            // on button release. Mid-hold re-learning uses the stricter, own-filtered
+            // recent consensus instead.
+            if (filter.anchorValid.load(std::memory_order_acquire) &&
+                correction.applied.load(std::memory_order_acquire) != ownCountAtHoldStart) {
+                if (cfg.logStateChanges) {
+                    LogLine(L"## STATE anchor-release-estimate ignored: own output during hold");
+                }
                 return;
             }
             publishAnchor(anchor, hits, total, holdPhaseClient);
@@ -620,9 +778,10 @@ int main() {
     std::atomic<std::uint64_t> anchorCount   {0};
     std::atomic<std::uint64_t> jumpCount     {0};
     std::atomic<std::uint64_t> injectedCount {0};
+    std::atomic<unsigned> markerCount {0};
 
     std::thread writer([&] {
-        rmf::ProcessNameCache names(cfg.targetProcess);
+        rmf::ProcessNameCache names(cfg.targetProcess, cfg.targetPath);
 
         POINT previousPt {0, 0};
         bool  havePrevious = false;
@@ -733,6 +892,8 @@ int main() {
                 snap.targetProcess     = cfg.targetProcess;
                 snap.loggingPaused     = filter.paused.load();
                 snap.correctionAllowed = correction.allowed;
+                snap.abTestUi          = cfg.showAbTestUi;
+                snap.markers           = markerCount.load(std::memory_order_relaxed);
                 snap.mode              = correction.Mode();
                 snap.lockReason        = lockHint;
                 {
@@ -747,7 +908,7 @@ int main() {
                     // "has the game been started at all" changes slowly.
                     const ULONGLONG tick = GetTickCount64();
                     if (lastProcessScan == 0 || tick - lastProcessScan >= 2000) {
-                        gameRunning     = rmf::IsProcessRunning(cfg.targetProcess);
+                        gameRunning     = rmf::IsProcessRunning(cfg.targetProcess, cfg.targetPath);
                         lastProcessScan = tick;
                     }
                     snap.game = gameRunning ? rmf::GameState::Background : rmf::GameState::NotRunning;
@@ -817,9 +978,38 @@ int main() {
     // ---- message loop --------------------------------------------------------------------
     // WH_MOUSE_LL callbacks are delivered on this thread, so this loop drives the hook and
     // must stay responsive. It also executes the correction output posted by the hook.
-    unsigned markerCounter = 0;
     long long smoothPendingX = 0;
     long long smoothPendingY = 0;
+    std::uint32_t lastAnchorRevision = anchorRevision.load(std::memory_order_acquire);
+
+    // Opt-in A/B diagnostics. These counters belong to the message-loop thread; the
+    // mouse hook does no additional work and logging is limited to one summary per 250 ms.
+    struct TimingWindow {
+        unsigned timerTicks       = 0;
+        unsigned incoming         = 0;
+        unsigned outputAttempts   = 0;
+        unsigned missingAnchor    = 0;
+        unsigned cursorReadFailed = 0;
+        unsigned offAnchor        = 0;
+        unsigned emptyPending     = 0;
+        std::uint64_t maxTimerGapMs = 0;
+        long lastAnchorDx = 0;
+        long lastAnchorDy = 0;
+        POINT lastCursor {0, 0};
+        POINT lastAnchor {0, 0};
+    } timing;
+    std::uint64_t timingLastTickMs = 0;
+    std::uint64_t timingLastReportMs = 0;
+    std::uint64_t timingLastInputMs = 0;
+    std::uint64_t timingPendingSinceMs = 0;
+
+    auto qpcNowMs = [&]() -> std::uint64_t {
+        LARGE_INTEGER now {};
+        QueryPerformanceCounter(&now);
+        // Split before multiplying to avoid overflow during long system uptimes.
+        return static_cast<std::uint64_t>(now.QuadPart / qpcFreq) * 1000 +
+               static_cast<std::uint64_t>((now.QuadPart % qpcFreq) * 1000 / qpcFreq);
+    };
 
     auto applyDelta = [&](rmf::CorrectionMode mode, long dx, long dy) {
         POINT before {};
@@ -848,7 +1038,12 @@ int main() {
         }
 
         if (ok) {
-            correction.applied.fetch_add(1, std::memory_order_relaxed);
+            if (mode == rmf::CorrectionMode::Absolute) {
+                lastOwnTargetX.store(target.x, std::memory_order_relaxed);
+                lastOwnTargetY.store(target.y, std::memory_order_relaxed);
+                lastOwnOutputMs.store(GetTickCount64(), std::memory_order_release);
+            }
+            correction.applied.fetch_add(1, std::memory_order_release);
             consecutiveOutputFailures = 0;
             const std::int64_t pending = correction.pendingEcho.fetch_add(1) + 1;
             if (pending > static_cast<std::int64_t>(cfg.watchdogMaxUnechoed)) {
@@ -866,8 +1061,71 @@ int main() {
         }
     };
 
-    const UINT_PTR smoothTimerId = SetTimer(nullptr, kSmoothTimer, kSmoothIntervalMs, nullptr);
-    if (smoothTimerId == 0) {
+    // Windows WM_TIMER is low priority and was measured around 27 ms/tick despite a
+    // 16 ms requested period. An opt-in high-resolution waitable timer produces at
+    // most ONE outstanding thread message; the actual cursor output remains here on
+    // the message-loop/hook thread. Do not change system-wide timer resolution.
+    HANDLE highResTimer = nullptr;
+    std::thread highResWorker;
+    std::atomic<bool> stopHighResWorker {false};
+    std::atomic<bool> highResTickQueued {false};
+    std::atomic<bool> highResTimerFailed {false};
+    if (cfg.highResSmoothingTimer) {
+        highResTimer = CreateWaitableTimerExW(
+            nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+            TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (highResTimer) {
+            LARGE_INTEGER firstDue {};
+            firstDue.QuadPart = -static_cast<LONGLONG>(kSmoothIntervalMs) * 10000;
+            if (!SetWaitableTimer(highResTimer, &firstDue,
+                                  static_cast<LONG>(kSmoothIntervalMs),
+                                  nullptr, nullptr, FALSE)) {
+                CloseHandle(highResTimer);
+                highResTimer = nullptr;
+            }
+        }
+        if (highResTimer) {
+            // Ensure PostThreadMessage always has an existing message queue.
+            MSG initialQueueMessage {};
+            PeekMessageW(&initialQueueMessage, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+            try {
+                highResWorker = std::thread([&] {
+                    while (!stopHighResWorker.load(std::memory_order_acquire) &&
+                           g_running.load(std::memory_order_relaxed)) {
+                        const DWORD waited = WaitForSingleObject(highResTimer, 100);
+                        if (stopHighResWorker.load(std::memory_order_acquire)) break;
+                        if (waited == WAIT_TIMEOUT) continue;
+                        if (waited != WAIT_OBJECT_0) {
+                            highResTimerFailed.store(true, std::memory_order_release);
+                            RequestStop(); // fail closed if the timer breaks during a hold
+                            break;
+                        }
+                        if (!highResTickQueued.exchange(true, std::memory_order_acq_rel) &&
+                            !PostThreadMessageW(g_mainThreadId, kMsgSmoothTick, 0, 0)) {
+                            highResTickQueued.store(false, std::memory_order_release);
+                            highResTimerFailed.store(true, std::memory_order_release);
+                            RequestStop();
+                            break;
+                        }
+                    }
+                });
+            } catch (const std::system_error&) {
+                CancelWaitableTimer(highResTimer);
+                CloseHandle(highResTimer);
+                highResTimer = nullptr;
+            }
+        }
+        if (!highResTimer) {
+            LogLine(L"# CONFIG WARNING : high-resolution smoothing timer unavailable; "
+                    L"falling back to WM_TIMER");
+        }
+    }
+    const UINT_PTR smoothTimerId = highResTimer ? 0 :
+        SetTimer(nullptr, kSmoothTimer, kSmoothIntervalMs, nullptr);
+    const bool smoothTimerAvailable = highResTimer || smoothTimerId != 0;
+    LogLine(highResTimer ? L"## SMOOTH TIMER source=high-res-waitable period_ms=16" :
+                           L"## SMOOTH TIMER source=wm-timer period_ms=16");
+    if (!smoothTimerAvailable) {
         LogLine(L"# CONFIG WARNING : smoothing timer unavailable; absolute mode uses immediate output");
     }
     MSG msg {};
@@ -881,6 +1139,18 @@ int main() {
             break;
         }
 
+        const auto observedRevision = anchorRevision.load(std::memory_order_acquire);
+        if (observedRevision != lastAnchorRevision) {
+            lastAnchorRevision = observedRevision;
+            if (smoothPendingX || smoothPendingY) {
+                LogLine(Format(L"## SMOOTH RESET reason=anchor-relearned discarded=(%+lld,%+lld)",
+                               smoothPendingX, smoothPendingY));
+            }
+            smoothPendingX = 0;
+            smoothPendingY = 0;
+            timingPendingSinceMs = 0;
+        }
+
         if (msg.message == kMsgApplyDelta) {
             const rmf::CorrectionMode mode = correction.Mode();
             if (mode == rmf::CorrectionMode::Off) {
@@ -890,7 +1160,14 @@ int main() {
             }
             const long dx = static_cast<long>(static_cast<LONG_PTR>(msg.wParam));
             const long dy = static_cast<long>(static_cast<LONG_PTR>(msg.lParam));
-            if (mode == rmf::CorrectionMode::Absolute && smoothTimerId != 0) {
+            if (cfg.traceCorrectionTiming && mode == rmf::CorrectionMode::Absolute) {
+                ++timing.incoming;
+                timingLastInputMs = qpcNowMs();
+            }
+            if (mode == rmf::CorrectionMode::Absolute && smoothTimerAvailable) {
+                if (cfg.traceCorrectionTiming && smoothPendingX == 0 && smoothPendingY == 0) {
+                    timingPendingSinceMs = qpcNowMs();
+                }
                 auto retargetAxis = [&](long long& pending, long incoming, wchar_t axis) {
                     constexpr long kRetargetMinPx = 5;
                     const bool reversed =
@@ -907,13 +1184,63 @@ int main() {
                 retargetAxis(smoothPendingY, dy, L'y');
                 smoothPendingX += dx;
                 smoothPendingY += dy;
+                if (cfg.traceCorrectionTiming && smoothPendingX == 0 && smoothPendingY == 0) {
+                    timingPendingSinceMs = 0;
+                }
             } else {
                 applyDelta(mode, dx, dy);
             }
             continue;
         }
 
-        if (msg.message == WM_TIMER && msg.wParam == smoothTimerId) {
+        if ((smoothTimerId != 0 && msg.message == WM_TIMER &&
+             msg.wParam == smoothTimerId) ||
+            (highResTimer && msg.message == kMsgSmoothTick)) {
+            if (msg.message == kMsgSmoothTick) {
+                highResTickQueued.store(false, std::memory_order_release);
+            }
+            if (cfg.traceCorrectionTiming) {
+                const bool active = correction.Mode() == rmf::CorrectionMode::Absolute &&
+                                    cursorHeldByTarget.load(std::memory_order_relaxed);
+                if (!active) {
+                    timing = TimingWindow{};
+                    timingLastTickMs = 0;
+                    timingLastReportMs = 0;
+                    timingLastInputMs = 0;
+                    timingPendingSinceMs = 0;
+                } else {
+                    const std::uint64_t nowMs = qpcNowMs();
+                    if (timingLastReportMs == 0) timingLastReportMs = nowMs;
+                    if (timingLastTickMs != 0) {
+                        timing.maxTimerGapMs = std::max(timing.maxTimerGapMs, nowMs - timingLastTickMs);
+                    }
+                    timingLastTickMs = nowMs;
+                    ++timing.timerTicks;
+                    if (nowMs - timingLastReportMs >= 250) {
+                        const auto inputAge = timingLastInputMs == 0 ? -1LL :
+                            static_cast<long long>(nowMs - timingLastInputMs);
+                        const auto pendingAge = timingPendingSinceMs == 0 ? 0ULL :
+                            static_cast<unsigned long long>(nowMs - timingPendingSinceMs);
+                        LogLine(Format(
+                            L"## TIMING qpc_ms=%llu window_ms=%llu ticks=%u max_timer_gap_ms=%llu "
+                            L"input=%u apply=%u skip=no_anchor:%u,cursor:%u,off_anchor:%u,empty:%u "
+                            L"pending=(%lld,%lld) pending_age_ms=%llu input_age_ms=%lld "
+                            L"anchor_delta=(%ld,%ld) anchor=(%ld,%ld) cursor=(%ld,%ld)",
+                            static_cast<unsigned long long>(nowMs),
+                            static_cast<unsigned long long>(nowMs - timingLastReportMs),
+                            timing.timerTicks,
+                            static_cast<unsigned long long>(timing.maxTimerGapMs),
+                            timing.incoming, timing.outputAttempts, timing.missingAnchor,
+                            timing.cursorReadFailed, timing.offAnchor, timing.emptyPending,
+                            smoothPendingX, smoothPendingY, pendingAge, inputAge,
+                            timing.lastAnchorDx, timing.lastAnchorDy,
+                            timing.lastAnchor.x, timing.lastAnchor.y,
+                            timing.lastCursor.x, timing.lastCursor.y));
+                        timing = TimingWindow{};
+                        timingLastReportMs = nowMs;
+                    }
+                }
+            }
             if (correction.Mode() != rmf::CorrectionMode::Absolute ||
                 !cursorHeldByTarget.load(std::memory_order_relaxed)) {
                 smoothPendingX = 0;
@@ -925,19 +1252,28 @@ int main() {
             // camera motion. The learned anchor is the proof that the previous step was
             // read and the game warped back.
             if (!filter.anchorValid.load(std::memory_order_relaxed)) {
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.missingAnchor;
                 continue;
             }
             const rmf::StateSampler::Snapshot snap = sampler.Current();
             POINT current {};
             if (!GetCursorPos(&current)) {
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.cursorReadFailed;
                 continue;
             }
             const long anchorX = snap.clientScreenRect.left +
                                  filter.anchorOffsetX.load(std::memory_order_relaxed);
             const long anchorY = snap.clientScreenRect.top +
                                  filter.anchorOffsetY.load(std::memory_order_relaxed);
+            if (cfg.traceCorrectionTiming) {
+                timing.lastCursor = current;
+                timing.lastAnchor = POINT{anchorX, anchorY};
+                timing.lastAnchorDx = current.x - anchorX;
+                timing.lastAnchorDy = current.y - anchorY;
+            }
             if (std::abs(current.x - anchorX) > cfg.anchorTolerancePx ||
                 std::abs(current.y - anchorY) > cfg.anchorTolerancePx) {
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.offAnchor;
                 continue;
             }
             const long dx = static_cast<long>(std::clamp(
@@ -949,7 +1285,13 @@ int main() {
             if (dx != 0 || dy != 0) {
                 smoothPendingX -= dx;
                 smoothPendingY -= dy;
+                if (cfg.traceCorrectionTiming) {
+                    ++timing.outputAttempts;
+                    if (smoothPendingX == 0 && smoothPendingY == 0) timingPendingSinceMs = 0;
+                }
                 applyDelta(rmf::CorrectionMode::Absolute, dx, dy);
+            } else if (cfg.traceCorrectionTiming) {
+                ++timing.emptyPending;
             }
             continue;
         }
@@ -957,16 +1299,16 @@ int main() {
         if (msg.message == WM_HOTKEY) {
             switch (static_cast<int>(msg.wParam)) {
                 case kHotkeyMarker: {
-                    ++markerCounter;
+                    const unsigned markerNumber = markerCount.fetch_add(1, std::memory_order_relaxed) + 1;
                     const rmf::StateSampler::Snapshot snap = sampler.Current();
                     LogLine(Format(L"## MARKER #%u at cursor=(%ld,%ld) cursor_visible=%ls clip=%ls correction=%ls",
-                                   markerCounter, snap.cursorPos.x, snap.cursorPos.y,
+                                   markerNumber, snap.cursorPos.x, snap.cursorPos.y,
                                    snap.cursorVisible ? L"yes" : L"no",
                                    snap.clipIsFullScreen ? L"released" : L"CONFINED",
                                    modeLabel()));
                     FlushLog();
                     panel.Notice(rmf::NoticeLevel::Info,
-                                 Format(L"marker #%u written to the log", markerCounter));
+                                 Format(L"marker #%u written to the log", markerNumber));
                     break;
                 }
                 case kHotkeyPause: {
@@ -1004,8 +1346,13 @@ int main() {
     }
 
     // ---- shutdown ------------------------------------------------------------------------
-    if (smoothTimerId != 0) {
-        KillTimer(nullptr, smoothTimerId);
+    if (smoothTimerId != 0) KillTimer(nullptr, smoothTimerId);
+    stopHighResWorker.store(true, std::memory_order_release);
+    if (highResTimer) CancelWaitableTimer(highResTimer);
+    if (highResWorker.joinable()) highResWorker.join();
+    if (highResTimer) CloseHandle(highResTimer);
+    if (highResTimerFailed.load(std::memory_order_acquire)) {
+        LogLine(L"## SMOOTH TIMER FAILED: stopped correction rather than continuing without ticks");
     }
     g_running.store(false);
     correction.ForceOff();

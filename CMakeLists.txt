@@ -26,6 +26,7 @@ if(CMAKE_SIZEOF_VOID_P AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "RemoteMouseFix currently supports x64 only (got ${CMAKE_SIZEOF_VOID_P}-byte pointers).")
 endif()
 
+include(CTest)
 option(RMF_BUILD_PROBE "Build MouseLookProbe, the stand-in game used to test the correction" ON)
 
 configure_file(cmake/Version.h.in "${CMAKE_BINARY_DIR}/generated/rmf/Version.h" @ONLY)
@@ -84,6 +85,7 @@ add_custom_command(TARGET RemoteMouseFix POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/config/Start-AB-Test.cmd"
             "${CMAKE_SOURCE_DIR}/config/Start-Playing.cmd"
+            "${CMAKE_SOURCE_DIR}/config/RemoteMouseFix.ini"
             "$<TARGET_FILE_DIR:RemoteMouseFix>"
     COMMENT "Staging the shipped layout next to RemoteMouseFix.exe")
 
@@ -102,12 +104,19 @@ if(RMF_BUILD_PROBE)
     target_link_libraries(MouseLookProbe PRIVATE user32 gdi32 shell32)
 endif()
 
+if(BUILD_TESTING)
+    add_executable(RecentWarpAnchorTests tests/RecentWarpAnchorTests.cpp)
+    rmf_apply_common_settings(RecentWarpAnchorTests)
+    add_test(NAME RecentWarpAnchorTests COMMAND RecentWarpAnchorTests)
+endif()
+
 # What an unpacked release looks like: the two launchers, the programs, README and
 # LICENSE at the top, everything else in a folder of its own.
 install(TARGETS RemoteMouseFix InputEchoCheck RUNTIME DESTINATION .)
 install(FILES
     config/Start-AB-Test.cmd
     config/Start-Playing.cmd
+    config/RemoteMouseFix.ini
     README.md LICENSE
     DESTINATION .)
 install(FILES

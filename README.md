@@ -49,6 +49,7 @@ in a folder of its own:
   config/                 the three profiles
   docs/                   diagnostic reference
   logs/                   created on the first start
+  logs-ab/                created by the first A/B test
 ```
 
 ### Windows warnings on first start
@@ -144,7 +145,7 @@ and it has no upload or network feature. You decide whether to share a log.
    - hold the left mouse button and drag slowly.
 6. Note for each mode whether the camera is smooth, jumps, or moves too fast or too slowly.
 7. Press `Ctrl+Alt+C`, then `Ctrl+Alt+Q`.
-8. Open the newest file in `logs` and check that its final lines report `queue drops 0`
+8. Open the newest file in `logs-ab` and check that its final lines report `queue drops 0`
    and `watchdog trips 0`.
 9. ZIP that log and attach it to a
    [GitHub issue](https://github.com/quasistatic-setup/RemoteMouseFix/issues/new) together

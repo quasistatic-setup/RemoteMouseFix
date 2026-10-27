@@ -1,7 +1,7 @@
 # Log format and how to read it
 
 RemoteMouseFix writes one plain-text, UTF-8, CRLF log per session under `logs/` next to
-the EXE. Files are named `remotemousefix-YYYYMMDD-HHMMSS.log`, rotate at `max_log_bytes`
+the EXE (`logs-ab/` for the A/B profile). Files are named `remotemousefix-YYYYMMDD-HHMMSS.log`, rotate at `max_log_bytes`
 and are pruned to `max_log_files`. Pruning matches the `remotemousefix-*.log` prefix, so a
 renamed file that still starts with it is pruned too: copy evidence elsewhere.
 

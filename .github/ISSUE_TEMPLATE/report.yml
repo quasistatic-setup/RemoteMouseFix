@@ -69,7 +69,7 @@ body:
     attributes:
       label: Log
       description: |
-        Attach the ZIPped log from the `logs` folder by dragging it into this field, and paste
+        Attach the ZIPped log from the `logs-ab` folder (A/B test) or the `logs` folder by dragging it into this field, and paste
         the final lines that report `queue drops` and `watchdog trips`.
   - type: checkboxes
     id: conditions

@@ -12,9 +12,9 @@ correction is still experimental.
 - MouseLookProbe now provides visible/no-warp, hidden/no-warp and hidden/warp
   modes to distinguish cursor hiding from cursor repositioning. The original
   hidden/warp mode remains the default for automated regression testing.
-- The A/B launcher asks for the target executable basename (default Wow.exe),
-  with an optional --target-process override for scripts. The target is shown
-  in the status panel and only applies to the current session.
+- The A/B launcher reads the target executable filename from editable
+  `AB-Test.ini` beside the EXE (default `Wow.exe`), without prompting at
+  startup or modifying other profiles. Invalid INI values fail safely.
 - The A/B console displays Ctrl+Alt+M, the number of markers written and all
   correction/diagnostic hotkeys.
 - The CI diagnostic artifact includes MouseLookProbe.exe for direct tests.

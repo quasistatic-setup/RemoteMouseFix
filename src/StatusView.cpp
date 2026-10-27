@@ -194,7 +194,7 @@ std::vector<StatusView::Line> StatusView::Render() const {
             lines.push_back({yellow, std::wstring(L"  ") + targetLabel + L" o  " + game + L" is not running yet"});
             break;
         case GameState::Background:
-            lines.push_back({yellow, L"  GAME  o  " + game + L" is running, but another window is in front"});
+            lines.push_back({yellow, std::wstring(L"  ") + targetLabel + L" o  " + game + L" is running, but another window is in front"});
             break;
         case GameState::Foreground:
             lines.push_back({green, std::wstring(L"  ") + targetLabel + L" *  " + game + L" is in front"});

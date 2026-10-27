@@ -40,6 +40,7 @@ struct Config {
     unsigned statePollIntervalMs     = 10;    // cursor visibility / clip / anchor sampling period
     bool     logStateChanges         = true;
     bool     traceCorrectionTiming   = false; // opt-in timing trace for A/B tests
+    bool     highResSmoothingTimer   = false; // opt-in; default Windows WM_TIMER clock
     unsigned consoleStatusIntervalMs = 2000;  // 0 disables the live console status line
     unsigned heartbeatIntervalMs     = 10000; // periodic liveness line, 0 disables it
 

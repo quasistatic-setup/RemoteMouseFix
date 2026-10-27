@@ -315,6 +315,15 @@ a random remote mouse location; a stable cursor position alone is not proof of
 recentring. If there is insufficient evidence, output still stays blocked
 rather than guessing.
 
+A sample matching the most recent successful `SendInput` target (within
+2 px) is never admitted to the recent-anchor consensus. Observations during
+the first 160 ms after an own output are also quarantined, and any new
+own output clears the in-progress sample window. At the end of a hold, an
+estimate collected alongside own correction output is not allowed to replace
+an already valid anchor. These checks address a captured false relocation
+exactly 20 px from the real anchor (`kSmoothMaxStepPx`), which was followed
+by a stale-pending reset. A repeated synthetic point is not game warp proof.
+
 A successful recovery logs `## STATE anchor-relearned during hold` followed by
 `anchor-learned`. Any remaining smoothing movement queued for the previous
 anchor is dropped on the main message-loop thread with

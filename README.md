@@ -295,6 +295,7 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 | `watchdog_max_output_failures` | `5` | consecutive failed output calls before the watchdog trips |
 | `log_mouse_moves` | `true` | `false` records buttons, wheel and state only |
 | `trace_correction_timing` | `false` | opt-in 250 ms timer/anchor/pending-delta summaries; enabled in A/B profile |
+| `high_res_smoothing_timer` | `false` | opt-in high-resolution waitable clock for 16 ms smoothing; enabled only in A/B profile pending field validation |
 | `log_directory` | `logs` | relative paths resolve beside the EXE |
 | `log_file_prefix` | `remotemousefix` | log filename prefix |
 | `max_log_bytes` | `8388608` | rotate after this size |

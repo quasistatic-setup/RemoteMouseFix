@@ -79,7 +79,7 @@ colour repeats the answer: green means working, yellow means waiting for you, re
 the fix stopped itself.
 
 ```text
-  GAME  *  Wow.exe is in front
+  TARGET *  Wow.exe is in front
   FIX   *  on (absolute) - correcting the pointer
   WORK     20 jumps seen, 51 corrections applied
   MARK  #2  Ctrl+Alt+M = mark the start of a test section in the log
@@ -96,6 +96,19 @@ names the one thing to do next.
 
 Set `NO_COLOR=1` for a monochrome panel. When the output is redirected to a file, the
 panel is printed once per change instead of being repainted.
+
+The A/B launcher prompts for the executable name when double-clicked.
+Press Enter to keep `Wow.exe` from the configured profile or type a different
+filename such as `MouseLookProbe.exe` (no path). This choice lasts only for
+that run and never changes the JSON file. The selected target is shown as
+`TARGET` in the A/B panel; the fix operates only while that executable is
+foreground, under the original cursor and safety gates. The executable may be
+started after RemoteMouseFix.
+
+For scripted or unattended runs, supply `--target-process MouseLookProbe.exe`
+to `Start-AB-Test.cmd` to bypass the interactive question. When launching the
+EXE directly, the optional `--choose-target` flag enables the same prompt.
+Without either flag, the configured `target_process` remains in effect.
 
 The A/B profile additionally shows the number of markers written so far and all
 test hotkeys. Each press of `Ctrl+Alt+M` creates the next numbered `## MARKER #N`
@@ -241,7 +254,7 @@ The release EXE is statically linked and depends only on Windows system librarie
 the first command-line argument:
 
 ```text
-RemoteMouseFix.exe [path\to\config.json] [--seconds N]
+RemoteMouseFix.exe [path\to\config.json] [--seconds N] [--target-process Name.exe] [--choose-target]
 ```
 
 A relative name that is not found beside the EXE is looked up in `config\` as well, so a
@@ -251,7 +264,7 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 
 | Key | Built-in default | Meaning |
 | --- | --- | --- |
-| `target_process` | `Wow.exe` | executable to observe, matched case-insensitively |
+| `target_process` | `Wow.exe` | target executable name, case-insensitive; A/B startup selection overrides it only for that run |
 | `diagnostic_mode` | `true` | `true` prevents all correction; `false` permits correction modes |
 | `correction_mode` | `off` | startup mode: `off`, `absolute` or `relative` |
 | `watchdog_max_hidden_ms` | `180000` | hidden cursor duration before correction is disabled; `0` disables this check |

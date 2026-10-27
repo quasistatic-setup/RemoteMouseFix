@@ -84,7 +84,7 @@ add_custom_command(TARGET RemoteMouseFix POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/config/Start-AB-Test.cmd"
             "${CMAKE_SOURCE_DIR}/config/Start-Playing.cmd"
-            "${CMAKE_SOURCE_DIR}/config/AB-Test.ini"
+            "${CMAKE_SOURCE_DIR}/config/RemoteMouseFix.ini"
             "$<TARGET_FILE_DIR:RemoteMouseFix>"
     COMMENT "Staging the shipped layout next to RemoteMouseFix.exe")
 
@@ -109,7 +109,7 @@ install(TARGETS RemoteMouseFix InputEchoCheck RUNTIME DESTINATION .)
 install(FILES
     config/Start-AB-Test.cmd
     config/Start-Playing.cmd
-    config/AB-Test.ini
+    config/RemoteMouseFix.ini
     README.md LICENSE
     DESTINATION .)
 install(FILES

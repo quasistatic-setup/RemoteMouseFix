@@ -108,6 +108,10 @@ if(BUILD_TESTING)
     add_executable(RecentWarpAnchorTests tests/RecentWarpAnchorTests.cpp)
     rmf_apply_common_settings(RecentWarpAnchorTests)
     add_test(NAME RecentWarpAnchorTests COMMAND RecentWarpAnchorTests)
+
+    add_executable(WarpEvidenceTests tests/WarpEvidenceTests.cpp)
+    rmf_apply_common_settings(WarpEvidenceTests)
+    add_test(NAME WarpEvidenceTests COMMAND WarpEvidenceTests)
 endif()
 
 # What an unpacked release looks like: the two launchers, the programs, README and

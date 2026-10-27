@@ -360,5 +360,10 @@ In the same WoW/TeamViewer scenario, compare `## TIMING` tick counts,
 `Ctrl+Alt+C`, focus loss, multiple modes, `own==applied`, no `queue drops`
 or watchdog trips. Hardware, scheduling and game frame rate can still impose
 limits: a 16 ms requested timer does not guarantee 16 ms output or cure
-the input-side 500 ms pauses. The regular `Start-Playing.cmd` remains at the
-old timer by default until field results justify enabling this system-wide.
+the input-side 500 ms pauses. The A/B tests of 27 October 2026 showed a
+measured interval of about 16.2 ms versus 26.7 ms with WM_TIMER, with subjective
+improvement and no failed or missing SendInput echoes. Therefore the Playing
+profile also enables this timer by default; disable
+`high_res_smoothing_timer` in `config-play.json` to revert to WM_TIMER.
+The new Playing default still requires an ordinary-playing smoke test on
+Windows/TeamViewer before merging this PR.

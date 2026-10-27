@@ -225,24 +225,31 @@ In A/B the pointer can reach the screen edge. The probe records the
 the operator continued moving their mouse.
 
 First run the probe without RemoteMouseFix correcting it. If later capturing
-low-level input timing with RemoteMouseFix, set `Executable=MouseLookProbe.exe` in `AB-Test.ini`
+low-level input timing with RemoteMouseFix, set `Executable=MouseLookProbe.exe` under `[AB-Test]` in `RemoteMouseFix.ini`
 and use an isolated log folder when preserving historical traces. This test compares cursor behavior; it does not establish that the
 probe matches every detail of WoW's mouse input.
 
-### Capturing another target application
+### Selecting a target for A/B or normal playing
 
-Edit `AB-Test.ini` next to `RemoteMouseFix.exe` before starting
-`Start-AB-Test.cmd`:
+Edit `RemoteMouseFix.ini` beside `RemoteMouseFix.exe`:
 
 ```ini
-[Target]
+[AB-Test]
 Executable=MouseLookProbe.exe
+
+[Playing]
+Executable=D:\Games\MyGame\Game.exe
 ```
 
-The shipped value is `Wow.exe`. The file is read at each A/B startup; there
-is no interactive selection or JSON edit. A missing INI or invalid filename
-is a clear error and prevents the tool from starting correction. Only a
-filename ending in `.exe` is accepted, not a path. The A/B panel shows
-the selected `TARGET`. The regular gameplay and diagnostic profiles still
-use their existing JSON target. Foreground, hidden-cursor, injected-move-only
-and emergency-hotkey safety conditions are unchanged.
+Both sections ship with `Wow.exe` by default. `Start-AB-Test.cmd` uses
+`[AB-Test]`, and `Start-Playing.cmd` uses `[Playing]`. A bare executable
+filename matches the corresponding running process wherever it was installed.
+A full absolute Windows image path matches only that specific installation
+and prevents accidental cross-matching of similarly named games. The app does
+**not launch** the selected EXE. No user prompt or JSON editing is required.
+Missing/invalid INI fails safely before the mouse hook starts.
+The diagnostic-only profile continues using its JSON target, and existing
+foreground, hidden-cursor, injected-move-only and emergency-off checks remain.
+
+The name/path lookup is done in process enumeration and the PID cache,
+not in the low-level hook, which continues to rely on a prevalidated foreground PID.

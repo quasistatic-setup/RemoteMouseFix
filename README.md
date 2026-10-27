@@ -32,7 +32,7 @@ mouse button is held while the pointer moves slowly left and right.
 2. Extract the complete ZIP into a normal folder. Do not run the EXE from inside the ZIP.
 3. Check `RemoteMouseFix.ini` beside the EXE. The default `Executable=Wow.exe` works
    for any installed WoW executable with that filename. You can instead select one
-   exact installation by its full path; see [Target selection](#target-selection-remoteMousefixini).
+   exact installation by its full path; see [Target selection](#target-selection-remotemousefixini).
 4. Start WoW normally, without administrator rights, and connect through TeamViewer.
 5. Double-click `Start-Playing.cmd` and leave its console window open while playing.
    Use `Ctrl+Alt+C` to turn correction off immediately if needed.

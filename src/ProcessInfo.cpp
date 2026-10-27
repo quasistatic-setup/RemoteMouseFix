@@ -34,7 +34,7 @@ bool GetProcessCreateTime(DWORD pid, FILETIME& out) {
 
 } // namespace
 
-bool IsProcessRunning(const std::wstring& imageFileName) {
+bool IsProcessRunning(const std::wstring& imageFileName, const std::wstring& fullImagePath) {
     if (imageFileName.empty()) {
         return false;
     }
@@ -48,8 +48,17 @@ bool IsProcessRunning(const std::wstring& imageFileName) {
     if (Process32FirstW(snapshot, &entry)) {
         do {
             if (EqualsIgnoreCase(entry.szExeFile, imageFileName)) {
-                found = true;
-                break;
+                if (fullImagePath.empty()) {
+                    found = true;
+                    break;
+                }
+                std::wstring imagePath;
+                bool accessDenied = false;
+                if (QueryProcessImagePath(entry.th32ProcessID, imagePath, accessDenied) &&
+                    EqualsIgnoreCase(imagePath, fullImagePath)) {
+                    found = true;
+                    break;
+                }
             }
         } while (Process32NextW(snapshot, &entry));
     }
@@ -57,8 +66,8 @@ bool IsProcessRunning(const std::wstring& imageFileName) {
     return found;
 }
 
-ProcessNameCache::ProcessNameCache(std::wstring targetProcessName)
-    : target_(std::move(targetProcessName)) {}
+ProcessNameCache::ProcessNameCache(std::wstring targetProcessName, std::wstring fullImagePath)
+    : target_(std::move(targetProcessName)), targetPath_(std::move(fullImagePath)) {}
 
 ProcessNameCache::Entry& ProcessNameCache::Resolve(DWORD pid) {
     auto it = cache_.find(pid);
@@ -87,7 +96,8 @@ ProcessNameCache::Entry& ProcessNameCache::Resolve(DWORD pid) {
     bool accessDenied = false;
     if (QueryProcessImagePath(pid, path, accessDenied)) {
         entry.name     = FileNameOf(path);
-        entry.isTarget = EqualsIgnoreCase(entry.name, target_);
+        entry.isTarget = EqualsIgnoreCase(entry.name, target_) &&
+                         (targetPath_.empty() || EqualsIgnoreCase(path, targetPath_));
         entry.haveCreateTime = GetProcessCreateTime(pid, entry.createTime);
     } else if (accessDenied) {
         sawAccessDenied_ = true;

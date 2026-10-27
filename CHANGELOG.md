@@ -7,6 +7,14 @@ correction is still experimental.
 
 ## [Unreleased]
 
+### Performance
+
+- A/B-only opt-in high-resolution 16 ms waitable timer replaces the low-priority
+  WM_TIMER smoothing cadence. A worker coalesces notifications; SendInput remains
+  exclusively on the original message-loop thread. Falls back to WM_TIMER when
+  unavailable; a runtime timer/post failure stops correction safely.
+- Normal Playing retains WM_TIMER by default until Windows/TeamViewer testing.
+
 ### Fixed
 
 - Relearn a relocated game warp anchor *during* a hidden-cursor hold only

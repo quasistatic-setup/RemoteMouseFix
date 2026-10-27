@@ -26,7 +26,7 @@
 #include "rmf/Logger.h"
 #include "rmf/MouseHook.h"
 #include "rmf/ProcessInfo.h"
-#include "rmf/RecentWarpAnchor.h"
+#include "rmf/WarpEvidence.h"
 #include "rmf/StateSampler.h"
 #include "rmf/StatusView.h"
 #include "rmf/WinCompat.h"
@@ -533,25 +533,25 @@ int main() {
     std::atomic<bool> targetInForeground {false};
     std::atomic<bool> cursorHeldByTarget {false};
 
-    // Sampler thread only.
-    rmf::AnchorLearner anchorLearner;
-    rmf::RecentWarpAnchor recentAnchor;
+    // Sampler thread only. A hidden cursor is NOT proof of a game warp.
+    rmf::WarpEvidence warpEvidence;
     // Relearning changes the reference for outstanding smoothing steps: main thread
     // discards the stale backlog before emitting another corrected move.
     std::atomic<std::uint32_t> anchorRevision {0};
     // Published only after successful absolute SendInput. Used solely by the
-    // sampler to exclude our own cursor destinations from warp-anchor learning.
+    // sampler to exclude our own cursor destinations from warp learning.
     std::atomic<long> lastOwnTargetX {0};
     std::atomic<long> lastOwnTargetY {0};
     std::atomic<std::uint64_t> lastOwnOutputMs {0};
-    std::uint64_t ownCountAtHoldStart = 0; // sampler-thread only
-    bool          haveLastShownCursor = false;
-    POINT         lastShownCursor {0, 0};
-    bool          sawWarpAtHoldStart = false;
-    bool          holdPhaseOpen    = false;
-    RECT          holdPhaseClient  {0, 0, 0, 0};
-    ULONGLONG     hiddenSince      = 0;
+    std::uint64_t ownCountAtHoldStart = 0; // sampler thread only
+    bool          holdPhaseOpen = false;
+    ULONGLONG     hiddenSince = 0;
     std::uint32_t hiddenGeneration = 0;
+    const RECT virtualDesktop {
+        GetSystemMetrics(SM_XVIRTUALSCREEN),
+        GetSystemMetrics(SM_YVIRTUALSCREEN),
+        GetSystemMetrics(SM_XVIRTUALSCREEN) + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+        GetSystemMetrics(SM_YVIRTUALSCREEN) + GetSystemMetrics(SM_CYVIRTUALSCREEN)};
 
     auto publishAnchor = [&](POINT anchor, unsigned hits, unsigned total, RECT client) {
         const long offsetX = anchor.x - client.left;
@@ -603,110 +603,87 @@ int main() {
             LogLine(rmf::FormatStateLine(prev, now, samplerNames.NameForPid(now.foregroundPid)));
         },
         [&](const rmf::StateSampler::Snapshot& now) {
-            const bool holding = targetInForeground.load() && !now.cursorVisible;
+            const bool holding = targetInForeground.load(std::memory_order_relaxed) &&
+                                 !now.cursorVisible;
             cursorHeldByTarget.store(holding, std::memory_order_relaxed);
 
-            if (holding) {
-                // A warp-like discontinuity when the cursor becomes hidden is
-                // independent evidence of recentering. Stable positions alone are
-                // insufficient (Probe mode B can keep the cursor perfectly still).
-                if (!holdPhaseOpen) {
-                    recentAnchor.Reset();
-                    ownCountAtHoldStart = correction.applied.load(std::memory_order_acquire);
-                    sawWarpAtHoldStart = haveLastShownCursor &&
-                        (std::labs(now.cursorPos.x - lastShownCursor.x) >= 30 ||
-                         std::labs(now.cursorPos.y - lastShownCursor.y) >= 30);
-                }
-                const ULONGLONG tick = GetTickCount64();
-                const auto ownCount = correction.applied.load(std::memory_order_acquire);
-                const POINT lastOwnTarget {
-                    lastOwnTargetX.load(std::memory_order_relaxed),
-                    lastOwnTargetY.load(std::memory_order_relaxed)};
-                recentAnchor.Observe(now.cursorPos, ownCount, lastOwnTarget, tick,
-                                     lastOwnOutputMs.load(std::memory_order_acquire));
-                const std::uint32_t generation = correction.generation.load();
-                if (!holdPhaseOpen || generation != hiddenGeneration) {
-                    // The watchdog clock starts with the hold, or with the latest mode
-                    // change, so re-enabling during a long hold does not trip at once.
-                    hiddenSince      = tick;
-                    hiddenGeneration = generation;
-                }
-                holdPhaseOpen   = true;
-                holdPhaseClient = now.clientScreenRect;
-                anchorLearner.Add(now.cursorPos);
-
-                POINT liveAnchor {};
-                unsigned liveHits = 0, liveTotal = 0;
-                if (!filter.anchorValid.load(std::memory_order_relaxed) &&
-                    anchorLearner.Estimate(liveAnchor, liveHits, liveTotal)) {
-                    publishAnchor(liveAnchor, liveHits, liveTotal, now.clientScreenRect);
-                }
-
-                // A previous game anchor can become stale after moving the window or
-                // changing the game's camera mode. Accept a NEW location only after
-                // both an onset warp and a strong, recent 12-sample consensus.
-                // No output is issued from this sampler thread.
-                POINT candidate {};
-                unsigned candidateHits = 0, candidateSamples = 0;
-                if (sawWarpAtHoldStart &&
-                    correction.Mode() == rmf::CorrectionMode::Absolute &&
-                    filter.anchorValid.load(std::memory_order_relaxed) &&
-                    recentAnchor.Stable(candidate, candidateHits, candidateSamples)) {
-                    const long expectedX = now.clientScreenRect.left +
-                        filter.anchorOffsetX.load(std::memory_order_relaxed);
-                    const long expectedY = now.clientScreenRect.top +
-                        filter.anchorOffsetY.load(std::memory_order_relaxed);
-                    if (std::labs(candidate.x - expectedX) > cfg.anchorTolerancePx ||
-                        std::labs(candidate.y - expectedY) > cfg.anchorTolerancePx) {
-                        if (cfg.logStateChanges) {
-                            LogLine(Format(
-                                L"## STATE anchor-relearned during hold: previous=(%ld,%ld) "
-                                L"candidate=(%ld,%ld) hits=%u/%u (warp transition observed)",
-                                expectedX, expectedY, candidate.x, candidate.y,
-                                candidateHits, candidateSamples));
-                        }
-                        publishAnchor(candidate, candidateHits, candidateSamples, now.clientScreenRect);
-                    }
-                }
-
-                if (cfg.watchdogMaxHiddenMs > 0 &&
-                    correction.Mode() != rmf::CorrectionMode::Off &&
-                    tick - hiddenSince > cfg.watchdogMaxHiddenMs) {
-                    tripWatchdog(Format(L"cursor hidden continuously for more than %u ms",
-                                        cfg.watchdogMaxHiddenMs));
+            if (!holding) {
+                if (holdPhaseOpen) {
+                    filter.warpVerified.store(false, std::memory_order_release);
+                    filter.anchorValid.store(false, std::memory_order_release);
+                    warpEvidence.Reset();
+                    holdPhaseOpen = false;
                 }
                 return;
             }
 
-            if (targetInForeground.load(std::memory_order_relaxed) && now.cursorVisible) {
-                lastShownCursor = now.cursorPos;
-                haveLastShownCursor = true;
-            } else {
-                haveLastShownCursor = false;
+            const ULONGLONG tick = GetTickCount64();
+            const std::uint32_t generation =
+                correction.generation.load(std::memory_order_acquire);
+            if (!holdPhaseOpen || generation != hiddenGeneration) {
+                // New hidden hold or new correction mode: never reuse an old
+                // game's warp classification, even in the same target window.
+                filter.warpVerified.store(false, std::memory_order_release);
+                filter.anchorValid.store(false, std::memory_order_release);
+                warpEvidence.Reset();
+                hiddenSince = tick;
+                hiddenGeneration = generation;
+                ownCountAtHoldStart = correction.applied.load(std::memory_order_acquire);
             }
-            if (!holdPhaseOpen) {
-                return;
+            holdPhaseOpen = true;
+
+            // A seqlock snapshot of the most recent non-own injected move. The
+            // hook never waits for the sampler, and only writes this telemetry
+            // while the foreground target holds a hidden cursor.
+            rmf::RemotePointerSample remote {};
+            const auto version1 = filter.remoteVersion.load(std::memory_order_seq_cst);
+            if ((version1 & 1u) == 0 && version1 != 0) {
+                const POINT point {
+                    filter.remoteX.load(std::memory_order_seq_cst),
+                    filter.remoteY.load(std::memory_order_seq_cst)};
+                const auto remoteMs = filter.remoteMs.load(std::memory_order_seq_cst);
+                const auto version2 = filter.remoteVersion.load(std::memory_order_seq_cst);
+                if (version1 == version2 && remoteMs >= hiddenSince) {
+                    remote.point = point;
+                    remote.tickMs = remoteMs;
+                    remote.serial = version2 / 2u;
+                }
             }
-            holdPhaseOpen = false;
-            sawWarpAtHoldStart = false;
-            recentAnchor.Reset();
 
-            POINT anchor {};
-            unsigned hits = 0, total = 0;
-            if (!anchorLearner.Finish(anchor, hits, total)) return;
-
-            // Whole-hold estimates include our own SendInput positions. When output
-            // happened in this hold, they MUST NOT overwrite a learned game anchor
-            // on button release. Mid-hold re-learning uses the stricter, own-filtered
-            // recent consensus instead.
-            if (filter.anchorValid.load(std::memory_order_acquire) &&
-                correction.applied.load(std::memory_order_acquire) != ownCountAtHoldStart) {
+            const auto ownCount = correction.applied.load(std::memory_order_acquire);
+            const POINT lastOwnTarget {
+                lastOwnTargetX.load(std::memory_order_relaxed),
+                lastOwnTargetY.load(std::memory_order_relaxed)};
+            POINT verifiedAnchor {};
+            unsigned observedReturns = 0;
+            if (correction.Mode() != rmf::CorrectionMode::Off &&
+                warpEvidence.Observe(
+                    now.cursorPos, now.clientScreenRect, virtualDesktop, remote,
+                    tick, ownCount, lastOwnTarget,
+                    lastOwnOutputMs.load(std::memory_order_acquire),
+                    ownCount != ownCountAtHoldStart,
+                    verifiedAnchor, observedReturns)) {
+                const bool wasVerified =
+                    filter.warpVerified.load(std::memory_order_acquire);
                 if (cfg.logStateChanges) {
-                    LogLine(L"## STATE anchor-release-estimate ignored: own output during hold");
+                    LogLine(Format(
+                        L"## STATE warp-evidence confirmed anchor=(%ld,%ld) "
+                        L"returns=%u remote_serial=%llu previous_verified=%ls",
+                        verifiedAnchor.x, verifiedAnchor.y, observedReturns,
+                        static_cast<unsigned long long>(remote.serial),
+                        wasVerified ? L"yes" : L"no"));
                 }
-                return;
+                publishAnchor(verifiedAnchor, observedReturns, observedReturns,
+                              now.clientScreenRect);
+                filter.warpVerified.store(true, std::memory_order_release);
             }
-            publishAnchor(anchor, hits, total, holdPhaseClient);
+
+            if (cfg.watchdogMaxHiddenMs > 0 &&
+                correction.Mode() != rmf::CorrectionMode::Off &&
+                tick - hiddenSince > cfg.watchdogMaxHiddenMs) {
+                tripWatchdog(Format(L"cursor hidden continuously for more than %u ms",
+                                    cfg.watchdogMaxHiddenMs));
+            }
         });
 
     // ---- mode switching (message-loop thread only) ------------------------------------
@@ -721,6 +698,9 @@ int main() {
             return;
         }
         const rmf::CorrectionMode previous = correction.SetMode(target);
+        // Even an already verified warp must be re-established after a mode change.
+        // The sampler will also clear the anchor on the next generation transition.
+        filter.warpVerified.store(false, std::memory_order_release);
         consecutiveOutputFailures = 0;
         if (target != rmf::CorrectionMode::Off) {
             // Switching a mode back on clears the last stop, so the panel stops showing a

@@ -17,6 +17,7 @@ struct Config {
     // false: correction modes become available; the tool still starts with correction_mode.
     bool         diagnosticMode = true;
     bool         logMouseMoves  = true;       // false logs buttons/wheel/state only
+    bool         showAbTestUi   = false;      // only affects the status panel; no input changes
 
     // --- correction (only effective with diagnostic_mode = false) ---
     CorrectionMode correctionMode          = CorrectionMode::Off; // mode at startup

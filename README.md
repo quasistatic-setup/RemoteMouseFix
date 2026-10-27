@@ -30,27 +30,41 @@ mouse button is held while the pointer moves slowly left and right.
 1. Open the [latest release](https://github.com/quasistatic-setup/RemoteMouseFix/releases/latest)
    and download the Windows x64 ZIP from **Assets**.
 2. Extract the complete ZIP into a normal folder. Do not run the EXE from inside the ZIP.
-3. Start WoW normally, without administrator rights.
-4. Double-click `Start-Playing.cmd`. Keep its console window open while playing.
-5. Connect through TeamViewer and test the camera.
+3. Check `RemoteMouseFix.ini` beside the EXE. The default `Executable=Wow.exe` works
+   for any installed WoW executable with that filename. You can instead select one
+   exact installation by its full path; see [Target selection](#target-selection-remoteMousefixini).
+4. Start WoW normally, without administrator rights, and connect through TeamViewer.
+5. Double-click `Start-Playing.cmd` and leave its console window open while playing.
+   Use `Ctrl+Alt+C` to turn correction off immediately if needed.
 
-The gameplay profile targets `Wow.exe` and enables the recommended `absolute` correction
-immediately. It keeps compact diagnostic logs in the `logs` folder beside the program.
+`Start-Playing.cmd` uses the `[Playing]` target from `RemoteMouseFix.ini`, enables
+the recommended `absolute` correction and a high-resolution 16 ms smoothing timer,
+and writes compact diagnostics in `logs/`. `Start-AB-Test.cmd` has its own
+`[AB-Test]` target and writes detailed diagnostics in `logs-ab/`.
 
-The extracted folder holds the two launchers and the two programs; everything else stays
-in a folder of its own:
+The extracted ZIP contains:
 
 ```text
-  Start-Playing.cmd       play with the correction on
-  Start-AB-Test.cmd       compare the modes and record a detailed log
-  RemoteMouseFix.exe      the tool itself
-  InputEchoCheck.exe      companion check, see below
+  Start-Playing.cmd       WoW gameplay with correction enabled
+  Start-AB-Test.cmd       compare corrections and record detailed logs
+  RemoteMouseFix.ini      separate [Playing] and [AB-Test] targets
+  RemoteMouseFix.exe      the correction tool
+  InputEchoCheck.exe      synthetic input echo diagnostic
+  MouseLookProbe.exe      developer/test tool (modes A, B, C)
   README.md  LICENSE
-  config/                 the three profiles
+  config/                 diagnostic-only, A/B and Playing JSON profiles
   docs/                   diagnostic reference
-  logs/                   created by Start-Playing.cmd
-  logs-ab/                created by Start-AB-Test.cmd
+  logs/                   created during normal playing
+  logs-ab/                created by A/B testing
 ```
+
+> [!WARNING]
+> Only WoW 3.3.5a with TeamViewer and a **recentring hidden cursor** has been
+> positively tested for this correction. A hidden cursor **without recentering**
+> (MouseLookProbe mode B) can lose mouse movement while correction is enabled.
+> Do not use the enabled Playing/A/B correction on an unverified application.
+> For observation without changing input, start `RemoteMouseFix.exe` with its
+> default diagnostic-only `config/config.json` profile.
 
 ### Windows warnings on first start
 
@@ -99,8 +113,11 @@ names the one thing to do next.
 Set `NO_COLOR=1` for a monochrome panel. When the output is redirected to a file, the
 panel is printed once per change instead of being repainted.
 
+### Target selection: RemoteMouseFix.ini
+
 Both launchers read their own section of `RemoteMouseFix.ini` next to
-`RemoteMouseFix.exe`:
+`RemoteMouseFix.exe`. For example, the A/B test can target the separate
+MouseLookProbe program while normal playing stays on a specific WoW installation:
 
 ```ini
 [AB-Test]
@@ -110,6 +127,10 @@ Executable=MouseLookProbe.exe
 Executable=C:\Games\World of Warcraft\Wow.exe
 ```
 
+The shipped INI contains `Executable=Wow.exe` for **both** sections. The
+sample above is an example you can enter manually; do not select
+`MouseLookProbe.exe` in mode B with active correction.
+
 Use `Executable=Wow.exe` to match any running game process with that filename,
 **regardless of its installation directory**. Alternatively supply a full
 absolute Windows path to match **only that exact executable installation**.
@@ -117,8 +138,7 @@ Spaces in the path are supported. Enclosing the whole value in double quotes is 
 Windows removes them when reading the INI. Your runtime test confirmed both forms.
 Change the INI while the tool is stopped, save, and start the desired
 `Start-AB-Test.cmd` or `Start-Playing.cmd` launcher as usual. No startup
-question or JSON edit is needed. The shipped file uses `Wow.exe` for both
-sections, and the settings persist across sessions.
+question or JSON edit is needed. Both sections persist across sessions.
 
 RemoteMouseFix **does not launch a game**. The path selects the process to
 monitor and correct when the game is already running and in the foreground.
@@ -153,7 +173,8 @@ ensures that a remote operator always has an emergency-off key.
 | Setup | Status |
 | --- | --- |
 | TeamViewer with WoW 3.3.5a | measured target case; `absolute` is the recommended mode |
-| Another game that repeatedly recentres a hidden cursor | may work; test carefully |
+| Another game that repeatedly recentres a hidden cursor | unverified; test in diagnostic-only mode first and enable correction only after assessing compatibility |
+| A game that hides the cursor without recentering it | **unsupported with correction enabled**; intercepted movement may be lost (Probe mode B) |
 | A game that reads Raw Input | `relative` may work better, but Windows pointer settings can change its speed |
 | Another remote-control application | unknown until tested; please submit a comparison log |
 | Game running as administrator | unsupported; run the game and RemoteMouseFix normally, without elevation |
@@ -236,7 +257,10 @@ The full evidence and its limitations are in
 | `relative` | relative `SendInput` | can suit Raw Input readers, but pointer speed and acceleration distort movement |
 
 `absolute` spreads batched TeamViewer movement across steps of at most 20 pixels per axis
-every 16 ms. Pending movement is discarded on mouse-button release, focus loss or
+every 16 ms. A high-resolution Windows waitable timer is enabled in both the A/B and
+Playing profiles; if unavailable, the tool falls back to `WM_TIMER`. The high-resolution
+timer improved measured timing consistency, but cannot repair input gaps in TeamViewer.
+Pending movement is discarded on mouse-button release, focus loss or
 correction shutdown. When new remote movement reverses an axis, stale queued movement on
 that axis is discarded so the camera follows the new direction without elastic pullback.
 Opposing deltas below 5 pixels are treated as remote-input noise.
@@ -295,7 +319,7 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 | `watchdog_max_output_failures` | `5` | consecutive failed output calls before the watchdog trips |
 | `log_mouse_moves` | `true` | `false` records buttons, wheel and state only |
 | `trace_correction_timing` | `false` | opt-in 250 ms timer/anchor/pending-delta summaries; enabled in A/B profile |
-| `high_res_smoothing_timer` | `false` | high-resolution waitable clock for 16 ms smoothing; enabled in both A/B and Playing profiles after successful A/B field tests; optional to disable |
+| `high_res_smoothing_timer` | `false` | high-resolution waitable clock for 16 ms smoothing (with WM_TIMER fallback); explicitly `true` in shipped A/B and Playing profiles |
 | `log_directory` | `logs` | relative paths resolve beside the EXE |
 | `log_file_prefix` | `remotemousefix` | log filename prefix |
 | `max_log_bytes` | `8388608` | rotate after this size |

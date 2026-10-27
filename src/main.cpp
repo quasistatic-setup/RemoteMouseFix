@@ -544,6 +544,7 @@ int main() {
     std::uint64_t ownCountAtHoldStart = 0; // sampler thread only
     bool          holdPhaseOpen = false;
     ULONGLONG     hiddenSince = 0;
+    ULONGLONG     offAnchorSince = 0;
     std::uint32_t hiddenGeneration = 0;
     const RECT virtualDesktop {
         GetSystemMetrics(SM_XVIRTUALSCREEN),
@@ -610,6 +611,7 @@ int main() {
                     filter.warpVerified.store(false, std::memory_order_release);
                     filter.anchorValid.store(false, std::memory_order_release);
                     warpEvidence.Reset();
+                    offAnchorSince = 0;
                     holdPhaseOpen = false;
                 }
                 return;
@@ -625,6 +627,7 @@ int main() {
                 filter.anchorValid.store(false, std::memory_order_release);
                 warpEvidence.Reset();
                 hiddenSince = tick;
+                offAnchorSince = 0;
                 hiddenGeneration = generation;
                 ownCountAtHoldStart = correction.applied.load(std::memory_order_acquire);
             }
@@ -674,6 +677,39 @@ int main() {
                 publishAnchor(verifiedAnchor, observedReturns, observedReturns,
                               now.clientScreenRect);
                 filter.warpVerified.store(true, std::memory_order_release);
+                offAnchorSince = 0;
+            }
+
+            // A verified game may stop warping or move its anchor mid-hold.
+            // Never suppress indefinitely when the actual cursor remains far
+            // from the learned point with no recent own SendInput explaining it.
+            if (filter.warpVerified.load(std::memory_order_acquire) &&
+                filter.anchorValid.load(std::memory_order_acquire)) {
+                const long expectedX = now.clientScreenRect.left +
+                    filter.anchorOffsetX.load(std::memory_order_relaxed);
+                const long expectedY = now.clientScreenRect.top +
+                    filter.anchorOffsetY.load(std::memory_order_relaxed);
+                const auto ownMs = lastOwnOutputMs.load(std::memory_order_acquire);
+                const bool recentOwn = ownCount != ownCountAtHoldStart &&
+                    ownMs != 0 && (tick < ownMs || tick - ownMs < 160);
+                const bool offAnchor =
+                    std::labs(now.cursorPos.x - expectedX) > cfg.anchorTolerancePx ||
+                    std::labs(now.cursorPos.y - expectedY) > cfg.anchorTolerancePx;
+                if (!offAnchor || recentOwn) {
+                    offAnchorSince = 0;
+                } else if (offAnchorSince == 0) {
+                    offAnchorSince = tick;
+                } else if (tick - offAnchorSince >= 300) {
+                    filter.warpVerified.store(false, std::memory_order_release);
+                    filter.anchorValid.store(false, std::memory_order_release);
+                    warpEvidence.Reset();
+                    anchorRevision.fetch_add(1, std::memory_order_release);
+                    offAnchorSince = 0;
+                    if (cfg.logStateChanges) {
+                        LogLine(L"## STATE warp-evidence revoked: off-anchor >300ms; "
+                                L"remote moves now pass through");
+                    }
+                }
             }
 
             if (cfg.watchdogMaxHiddenMs > 0 &&
@@ -1068,7 +1104,8 @@ int main() {
 
         if (msg.message == kMsgApplyDelta) {
             const rmf::CorrectionMode mode = correction.Mode();
-            if (mode == rmf::CorrectionMode::Off) {
+            if (mode == rmf::CorrectionMode::Off ||
+                !filter.warpVerified.load(std::memory_order_acquire)) {
                 smoothPendingX = 0;
                 smoothPendingY = 0;
                 continue; // switched off after the hook posted: drop quietly
@@ -1152,7 +1189,8 @@ int main() {
                 }
             }
             if (correction.Mode() != rmf::CorrectionMode::Absolute ||
-                !cursorHeldByTarget.load(std::memory_order_relaxed)) {
+                !cursorHeldByTarget.load(std::memory_order_relaxed) ||
+                !filter.warpVerified.load(std::memory_order_acquire)) {
                 smoothPendingX = 0;
                 smoothPendingY = 0;
                 continue;

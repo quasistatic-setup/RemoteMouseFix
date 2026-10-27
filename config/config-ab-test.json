@@ -1,7 +1,7 @@
 {
   "_about": "RemoteMouseFix A/B test configuration: absolute correction starts immediately and can be switched by hotkey. Keys starting with _ are comments.",
 
-  "_target_process": "Executable to observe, matched case-insensitively on the file name.",
+  "_target_process": "For A/B tests, edit AB-Test.ini beside RemoteMouseFix.exe instead. Other JSON profiles still use target_process.",
   "target_process": "Wow.exe",
 
   "_diagnostic_mode": "true: input is never modified and no correction mode can be enabled. false: correction modes become available (see config-ab-test.json).",

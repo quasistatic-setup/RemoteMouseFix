@@ -210,8 +210,6 @@ int main() {
 
     // ---- command line --------------------------------------------------------------
     std::wstring configPath;
-    std::wstring targetOverride;
-    bool chooseTarget = false;
     unsigned runSeconds = 0; // 0 = run until the operator stops the tool
     {
         int argc = 0;
@@ -220,11 +218,9 @@ int main() {
                 const std::wstring arg = argv[i];
                 if (arg == L"--help" || arg == L"-h" || arg == L"/?") {
                     ConsoleOut(L"RemoteMouseFix %ls - diagnostics with optional correction\n\n"
-                               L"Usage: RemoteMouseFix.exe [path\\to\\config.json] [--seconds N]\n"
-                               L"                         [--target-process Name.exe] [--choose-target]\n\n"
-                               L"  --seconds N          stop automatically after N seconds\n"
-                               L"  --target-process EXE override the configured process name for this run\n"
-                               L"  --choose-target      prompt for a process name at startup\n\n"
+                               L"Usage: RemoteMouseFix.exe [path\\to\\config.json] [--seconds N]\n\n"
+                               L"  --seconds N  stop automatically after N seconds (0 = run until stopped)\n"
+                               L"  A/B target is read from AB-Test.ini beside the executable.\n\n"
                                L"Hotkeys while running:\n"
                                L"  Ctrl+Alt+M   write a marker line into the log\n"
                                L"  Ctrl+Alt+P   pause / resume logging (correction keeps running)\n"
@@ -239,19 +235,6 @@ int main() {
                 }
                 if (arg == L"--seconds" && i + 1 < argc) {
                     runSeconds = static_cast<unsigned>(std::max(0L, std::wcstol(argv[++i], nullptr, 10)));
-                    continue;
-                }
-                if (arg == L"--target-process") {
-                    if (i + 1 >= argc) {
-                        ConsoleOut(L"ERROR: --target-process requires a filename such as MouseLookProbe.exe\n");
-                        LocalFree(argv);
-                        return 2;
-                    }
-                    targetOverride = argv[++i];
-                    continue;
-                }
-                if (arg == L"--choose-target") {
-                    chooseTarget = true;
                     continue;
                 }
                 if (configPath.empty() && !arg.empty() && arg[0] != L'-') {
@@ -279,41 +262,34 @@ int main() {
     rmf::Config cfg;
     rmf::LoadConfig(configPath, cfg);
 
-    // Select by executable BASENAME only: the existing foreground PID/process-name
-    // checks remain responsible for restricting capture and correction to that process.
-    // Never launch an executable or accept an arbitrary path as the target.
-    auto validTarget = [](const std::wstring& name) {
-        return name.size() >= 5 &&
-               name.find_first_of(L"<>:\"/\\|?*") == std::wstring::npos &&
-               name.front() != L' ' && name.back() != L' ' &&
-               CompareStringOrdinal(name.c_str() + name.size() - 4, 4,
-                                    L".exe", 4, TRUE) == CSTR_EQUAL;
-    };
-    if (chooseTarget && targetOverride.empty()) {
-        ConsoleOut(L"\n  A/B TEST: target executable\n"
-                   L"  Enter the executable filename, not a path.\n"
-                   L"  Examples: Wow.exe or MouseLookProbe.exe\n"
-                   L"  Press Enter to keep [%ls]: ", cfg.targetProcess.c_str());
-        wchar_t input[260] {};
-        DWORD charsRead = 0;
-        if (!ReadConsoleW(GetStdHandle(STD_INPUT_HANDLE), input, 259, &charsRead, nullptr)) {
-            ConsoleOut(L"\nERROR: target selection needs an interactive console.\n");
+    // The A/B profile alone may select a different target through a simple INI file.
+    // Keep the executable basename validation: all original foreground, hidden-cursor
+    // and injected-input safety gates remain unchanged. Nothing starts the target EXE.
+    if (cfg.showAbTestUi) {
+        const std::wstring iniPath = rmf::ResolveAgainstExeDir(L"AB-Test.ini");
+        if (!FileExists(iniPath)) {
+            ConsoleOut(L"ERROR: AB-Test.ini is missing beside RemoteMouseFix.exe.\n"
+                       L"       Restore it from the test package; no correction started.\n");
             return 2;
         }
-        std::wstring selected(input, static_cast<std::size_t>(charsRead));
-        const auto end = selected.find_first_of(L"\r\n");
-        if (end != std::wstring::npos) selected.erase(end);
-        if (!selected.empty()) targetOverride = selected;
-    }
-    if (!targetOverride.empty()) {
-        if (!validTarget(targetOverride)) {
-            ConsoleOut(L"ERROR: invalid executable name '%ls'. Use a filename ending in .exe, "
-                       L"without a directory path.\n", targetOverride.c_str());
+
+        wchar_t selected[260] {};
+        const DWORD len = GetPrivateProfileStringW(
+            L"Target", L"Executable", L"", selected, 260, iniPath.c_str());
+        const std::wstring target(selected, static_cast<std::size_t>(len));
+        const bool valid = target.size() >= 5 && target.size() <= 255 &&
+                           target.find_first_of(L"<>:\\"/\\\\|?*\\r\\n\\t") == std::wstring::npos &&
+                           target.front() != L' ' && target.back() != L' ' &&
+                           CompareStringOrdinal(target.c_str() + target.size() - 4, 4,
+                                                L".exe", 4, TRUE) == CSTR_EQUAL;
+        if (!valid) {
+            ConsoleOut(L"ERROR: invalid [Target] Executable in AB-Test.ini.\n"
+                       L"       Enter a filename like Wow.exe or MouseLookProbe.exe (no path).\n");
             return 2;
         }
-        cfg.targetProcess = targetOverride; // session override, never writes the JSON profile
+        cfg.targetProcess = target;
+        ConsoleOut(L"  A/B target (AB-Test.ini): %ls\n", cfg.targetProcess.c_str());
     }
-    ConsoleOut(L"  Target for this session: %ls\n", cfg.targetProcess.c_str());
 
     SetConsoleTitleW(cfg.diagnosticMode
                          ? L"RemoteMouseFix " RMF_VERSION_W L" - DIAGNOSTIC ONLY"

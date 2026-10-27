@@ -329,3 +329,27 @@ without a multi-second `off_anchor` run or a burst of old queued motion.
 Repeat without moving the window. Probe A/B/C, relative and OFF modes,
 hotkey emergency-off and loss of focus must still behave correctly.
 **MSVC/CTest alone does not establish runtime safety or mouse-look quality.**
+
+## High-resolution smoothing A/B experiment (follow-up PR)
+
+The original `SetTimer(..., 16, ...)` often delivered a 27 ms average tick in
+the WoW capture. With `high_res_smoothing_timer=true`, the A/B profile instead
+uses a high-resolution Windows waitable timer and a dedicated waiter thread
+which posts at most one outstanding `WM_APP` timer notification to the main
+message loop. The mouse hook and all `SendInput` calls remain on the original
+thread. No process-wide timer-resolution changes, DLL injection or game hooks.
+
+A startup line identifies `## SMOOTH TIMER source=high-res-waitable` or
+`source=wm-timer`. If Windows cannot create or arm the high-resolution timer,
+the tool logs a warning and uses `WM_TIMER`. If an active high-resolution
+timer fails or cannot post to the original thread, the application shuts down
+without silently leaving suppressed movements uncorrected.
+
+In the same WoW/TeamViewer scenario, compare `## TIMING` tick counts,
+`max_timer_gap_ms`, pending age and perceived camera smoothness with
+`high_res_smoothing_timer=true` versus `false`. Especially verify
+`Ctrl+Alt+C`, focus loss, multiple modes, `own==applied`, no `queue drops`
+or watchdog trips. Hardware, scheduling and game frame rate can still impose
+limits: a 16 ms requested timer does not guarantee 16 ms output or cure
+the input-side 500 ms pauses. The regular `Start-Playing.cmd` remains at the
+old timer by default until field results justify enabling this system-wide.

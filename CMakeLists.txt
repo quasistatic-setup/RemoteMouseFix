@@ -26,6 +26,7 @@ if(CMAKE_SIZEOF_VOID_P AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "RemoteMouseFix currently supports x64 only (got ${CMAKE_SIZEOF_VOID_P}-byte pointers).")
 endif()
 
+include(CTest)
 option(RMF_BUILD_PROBE "Build MouseLookProbe, the stand-in game used to test the correction" ON)
 
 configure_file(cmake/Version.h.in "${CMAKE_BINARY_DIR}/generated/rmf/Version.h" @ONLY)
@@ -101,6 +102,12 @@ if(RMF_BUILD_PROBE)
     )
     rmf_apply_common_settings(MouseLookProbe)
     target_link_libraries(MouseLookProbe PRIVATE user32 gdi32 shell32)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(RecentWarpAnchorTests tests/RecentWarpAnchorTests.cpp)
+    rmf_apply_common_settings(RecentWarpAnchorTests)
+    add_test(NAME RecentWarpAnchorTests COMMAND RecentWarpAnchorTests)
 endif()
 
 # What an unpacked release looks like: the two launchers, the programs, README and

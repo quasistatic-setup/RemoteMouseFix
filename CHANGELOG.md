@@ -7,6 +7,16 @@ correction is still experimental.
 
 ## [Unreleased]
 
+### Added
+
+- MouseLookProbe now provides visible/no-warp, hidden/no-warp and hidden/warp
+  modes to distinguish cursor hiding from cursor repositioning. The original
+  hidden/warp mode remains the default for automated regression testing.
+- The A/B console displays Ctrl+Alt+M, the number of markers written and all
+  correction/diagnostic hotkeys.
+- The CI diagnostic artifact includes MouseLookProbe.exe for direct tests.
+
+
 ## [0.7.0] - 2026-09-21
 
 ### Added

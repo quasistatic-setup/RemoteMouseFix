@@ -244,7 +244,7 @@ Executable=D:\Games\MyGame\Game.exe
 Both sections ship with `Wow.exe` by default. `Start-AB-Test.cmd` uses
 `[AB-Test]`, and `Start-Playing.cmd` uses `[Playing]`. A bare executable
 filename matches the corresponding running process wherever it was installed.
-A full absolute Windows image path matches only that specific installation
+A full absolute Windows image path (with or without enclosing quotes) matches only that specific installation
 and prevents accidental cross-matching of similarly named games. The app does
 **not launch** the selected EXE. No user prompt or JSON editing is required.
 Missing/invalid INI fails safely before the mouse hook starts.

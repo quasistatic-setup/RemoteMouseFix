@@ -428,6 +428,8 @@ int main() {
                                 cfg.jumpThresholdPx, cfg.anchorTolerancePx, cfg.statePollIntervalMs));
         header.push_back(Format(L"# smoothing      : absolute only, interval=%ums max_step=%ldpx",
                                 kSmoothIntervalMs, kSmoothMaxStepPx));
+        header.push_back(L"# timing trace   : " +
+                         std::wstring(cfg.traceCorrectionTiming ? L"on (250ms windows)" : L"off"));
         header.push_back(Format(L"# heartbeat      : every %u ms (0 = off)", cfg.heartbeatIntervalMs));
         header.push_back(Format(L"# rotation       : %llu bytes, keep %u files",
                                 static_cast<unsigned long long>(cfg.maxLogBytes), cfg.maxLogFiles));
@@ -895,6 +897,35 @@ int main() {
     long long smoothPendingX = 0;
     long long smoothPendingY = 0;
 
+    // Opt-in A/B diagnostics. These counters belong to the message-loop thread; the
+    // mouse hook does no additional work and logging is limited to one summary per 250 ms.
+    struct TimingWindow {
+        unsigned timerTicks       = 0;
+        unsigned incoming         = 0;
+        unsigned outputAttempts   = 0;
+        unsigned missingAnchor    = 0;
+        unsigned cursorReadFailed = 0;
+        unsigned offAnchor        = 0;
+        unsigned emptyPending     = 0;
+        std::uint64_t maxTimerGapMs = 0;
+        long lastAnchorDx = 0;
+        long lastAnchorDy = 0;
+        POINT lastCursor {0, 0};
+        POINT lastAnchor {0, 0};
+    } timing;
+    std::uint64_t timingLastTickMs = 0;
+    std::uint64_t timingLastReportMs = 0;
+    std::uint64_t timingLastInputMs = 0;
+    std::uint64_t timingPendingSinceMs = 0;
+
+    auto qpcNowMs = [&]() -> std::uint64_t {
+        LARGE_INTEGER now {};
+        QueryPerformanceCounter(&now);
+        // Split before multiplying to avoid overflow during long system uptimes.
+        return static_cast<std::uint64_t>(now.QuadPart / qpcFreq) * 1000 +
+               static_cast<std::uint64_t>((now.QuadPart % qpcFreq) * 1000 / qpcFreq);
+    };
+
     auto applyDelta = [&](rmf::CorrectionMode mode, long dx, long dy) {
         POINT before {};
         GetCursorPos(&before);
@@ -964,7 +995,14 @@ int main() {
             }
             const long dx = static_cast<long>(static_cast<LONG_PTR>(msg.wParam));
             const long dy = static_cast<long>(static_cast<LONG_PTR>(msg.lParam));
+            if (cfg.traceCorrectionTiming && mode == rmf::CorrectionMode::Absolute) {
+                ++timing.incoming;
+                timingLastInputMs = qpcNowMs();
+            }
             if (mode == rmf::CorrectionMode::Absolute && smoothTimerId != 0) {
+                if (cfg.traceCorrectionTiming && smoothPendingX == 0 && smoothPendingY == 0) {
+                    timingPendingSinceMs = qpcNowMs();
+                }
                 auto retargetAxis = [&](long long& pending, long incoming, wchar_t axis) {
                     constexpr long kRetargetMinPx = 5;
                     const bool reversed =
@@ -981,6 +1019,9 @@ int main() {
                 retargetAxis(smoothPendingY, dy, L'y');
                 smoothPendingX += dx;
                 smoothPendingY += dy;
+                if (cfg.traceCorrectionTiming && smoothPendingX == 0 && smoothPendingY == 0) {
+                    timingPendingSinceMs = 0;
+                }
             } else {
                 applyDelta(mode, dx, dy);
             }
@@ -988,6 +1029,48 @@ int main() {
         }
 
         if (msg.message == WM_TIMER && msg.wParam == smoothTimerId) {
+            if (cfg.traceCorrectionTiming) {
+                const bool active = correction.Mode() == rmf::CorrectionMode::Absolute &&
+                                    cursorHeldByTarget.load(std::memory_order_relaxed);
+                if (!active) {
+                    timing = TimingWindow{};
+                    timingLastTickMs = 0;
+                    timingLastReportMs = 0;
+                    timingLastInputMs = 0;
+                    timingPendingSinceMs = 0;
+                } else {
+                    const std::uint64_t nowMs = qpcNowMs();
+                    if (timingLastReportMs == 0) timingLastReportMs = nowMs;
+                    if (timingLastTickMs != 0) {
+                        timing.maxTimerGapMs = std::max(timing.maxTimerGapMs, nowMs - timingLastTickMs);
+                    }
+                    timingLastTickMs = nowMs;
+                    ++timing.timerTicks;
+                    if (nowMs - timingLastReportMs >= 250) {
+                        const auto inputAge = timingLastInputMs == 0 ? -1LL :
+                            static_cast<long long>(nowMs - timingLastInputMs);
+                        const auto pendingAge = timingPendingSinceMs == 0 ? 0ULL :
+                            static_cast<unsigned long long>(nowMs - timingPendingSinceMs);
+                        LogLine(Format(
+                            L"## TIMING qpc_ms=%llu window_ms=%llu ticks=%u max_timer_gap_ms=%llu "
+                            L"input=%u apply=%u skip=no_anchor:%u,cursor:%u,off_anchor:%u,empty:%u "
+                            L"pending=(%lld,%lld) pending_age_ms=%llu input_age_ms=%lld "
+                            L"anchor_delta=(%ld,%ld) anchor=(%ld,%ld) cursor=(%ld,%ld)",
+                            static_cast<unsigned long long>(nowMs),
+                            static_cast<unsigned long long>(nowMs - timingLastReportMs),
+                            timing.timerTicks,
+                            static_cast<unsigned long long>(timing.maxTimerGapMs),
+                            timing.incoming, timing.outputAttempts, timing.missingAnchor,
+                            timing.cursorReadFailed, timing.offAnchor, timing.emptyPending,
+                            smoothPendingX, smoothPendingY, pendingAge, inputAge,
+                            timing.lastAnchorDx, timing.lastAnchorDy,
+                            timing.lastAnchor.x, timing.lastAnchor.y,
+                            timing.lastCursor.x, timing.lastCursor.y));
+                        timing = TimingWindow{};
+                        timingLastReportMs = nowMs;
+                    }
+                }
+            }
             if (correction.Mode() != rmf::CorrectionMode::Absolute ||
                 !cursorHeldByTarget.load(std::memory_order_relaxed)) {
                 smoothPendingX = 0;
@@ -999,19 +1082,28 @@ int main() {
             // camera motion. The learned anchor is the proof that the previous step was
             // read and the game warped back.
             if (!filter.anchorValid.load(std::memory_order_relaxed)) {
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.missingAnchor;
                 continue;
             }
             const rmf::StateSampler::Snapshot snap = sampler.Current();
             POINT current {};
             if (!GetCursorPos(&current)) {
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.cursorReadFailed;
                 continue;
             }
             const long anchorX = snap.clientScreenRect.left +
                                  filter.anchorOffsetX.load(std::memory_order_relaxed);
             const long anchorY = snap.clientScreenRect.top +
                                  filter.anchorOffsetY.load(std::memory_order_relaxed);
+            if (cfg.traceCorrectionTiming) {
+                timing.lastCursor = current;
+                timing.lastAnchor = POINT{anchorX, anchorY};
+                timing.lastAnchorDx = current.x - anchorX;
+                timing.lastAnchorDy = current.y - anchorY;
+            }
             if (std::abs(current.x - anchorX) > cfg.anchorTolerancePx ||
                 std::abs(current.y - anchorY) > cfg.anchorTolerancePx) {
+                if (cfg.traceCorrectionTiming && (smoothPendingX || smoothPendingY)) ++timing.offAnchor;
                 continue;
             }
             const long dx = static_cast<long>(std::clamp(
@@ -1023,7 +1115,13 @@ int main() {
             if (dx != 0 || dy != 0) {
                 smoothPendingX -= dx;
                 smoothPendingY -= dy;
+                if (cfg.traceCorrectionTiming) {
+                    ++timing.outputAttempts;
+                    if (smoothPendingX == 0 && smoothPendingY == 0) timingPendingSinceMs = 0;
+                }
                 applyDelta(rmf::CorrectionMode::Absolute, dx, dy);
+            } else if (cfg.traceCorrectionTiming) {
+                ++timing.emptyPending;
             }
             continue;
         }

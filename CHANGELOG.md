@@ -9,6 +9,11 @@ correction is still experimental.
 
 ### Fixed
 
+- Require repeated, observed game recenter events before intercepting hidden-cursor
+  mouse input. Hidden/no-warp mode now passes through (MouseLookProbe B).
+  Recheck each hold and correction-mode change, keep the 16ms timer unchanged.
+  Regression cases cover no-warp, false-stable cursor and true warp evidence.
+
 - Relearn a relocated game warp anchor *during* a hidden-cursor hold only
   after an onset warp-like transition and a strong 12-sample stable consensus.
   On significant anchor changes, discard queued smoothing movement from the

@@ -12,7 +12,7 @@ namespace rmf {
 // foreground state alone cannot make, and the one users read wrong most often.
 //
 // Walks the process list, so it belongs on a slow timer, never in the hook callback.
-bool IsProcessRunning(const std::wstring& imageFileName);
+bool IsProcessRunning(const std::wstring& imageFileName, const std::wstring& fullImagePath = {});
 
 // Caches PID -> image file name so the writer thread never pays for a process query
 // twice, and so the hook thread can take a fast "is this even the target" decision.
@@ -22,7 +22,7 @@ bool IsProcessRunning(const std::wstring& imageFileName);
 // no longer matches.
 class ProcessNameCache {
 public:
-    explicit ProcessNameCache(std::wstring targetProcessName);
+    explicit ProcessNameCache(std::wstring targetProcessName, std::wstring fullImagePath = {});
 
     // File name only (e.g. "Wow.exe"), or an empty string when it cannot be determined.
     const std::wstring& NameForPid(DWORD pid);
@@ -47,6 +47,7 @@ private:
     Entry& Resolve(DWORD pid);
 
     std::wstring target_;
+    std::wstring targetPath_;
     std::unordered_map<DWORD, Entry> cache_;
     std::wstring empty_;
     bool sawAccessDenied_ = false;

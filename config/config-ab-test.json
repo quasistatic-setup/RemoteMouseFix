@@ -10,6 +10,9 @@
   "_log_mouse_moves": "false records buttons, wheel and state transitions only, which keeps logs small.",
   "log_mouse_moves": true,
 
+  "_show_ab_test_ui": "Show marker number and complete hotkeys in the A/B status panel.",
+  "show_ab_test_ui": true,
+
   "_correction_mode": "Starts in absolute. Switch while running: Ctrl+Alt+1 absolute, Ctrl+Alt+2 relative, Ctrl+Alt+C off.",
   "correction_mode": "absolute",
 

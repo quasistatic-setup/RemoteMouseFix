@@ -82,8 +82,10 @@ the fix stopped itself.
   GAME  *  Wow.exe is in front
   FIX   *  on (absolute) - correcting the pointer
   WORK     20 jumps seen, 51 corrections applied
+  MARK  #2  Ctrl+Alt+M = mark the start of a test section in the log
   NEXT  >  Everything is working. Ctrl+Alt+C switches the fix off at any time.
-  KEYS     Ctrl+Alt+1 fix on | Ctrl+Alt+C fix off | Ctrl+Alt+P pause log | Ctrl+Alt+Q quit
+  MODES    Ctrl+Alt+1 absolute | Ctrl+Alt+2 relative | Ctrl+Alt+C OFF
+  KEYS     Ctrl+Alt+M MARK | Ctrl+Alt+P pause log | Ctrl+Alt+Q quit
 ```
 
 `GAME` is yellow while the game is not running or while another window is in front: the
@@ -95,11 +97,18 @@ names the one thing to do next.
 Set `NO_COLOR=1` for a monochrome panel. When the output is redirected to a file, the
 panel is printed once per change instead of being repainted.
 
+The A/B profile additionally shows the number of markers written so far and all
+test hotkeys. Each press of `Ctrl+Alt+M` creates the next numbered `## MARKER #N`
+entry. Keep a short note of what each marker represents; a marker identifies a
+section boundary, not its meaning. An immediate notice confirms each marker.
+
 ### Controls
 
 | Hotkey | Effect |
 | --- | --- |
 | `Ctrl+Alt+C` | switch the correction off immediately |
+| `Ctrl+Alt+M` | add a numbered marker to the log |
+| `Ctrl+Alt+P` | pause/resume logging (correction continues) |
 | `Ctrl+Alt+1` | enable the recommended `absolute` correction |
 | `Ctrl+Alt+2` | enable the alternative `relative` correction |
 | `Ctrl+Alt+Q` | quit RemoteMouseFix cleanly |
@@ -306,9 +315,26 @@ kind of input this check sends, so its filter, not the system, would decide the 
 
 ## Developer test with MouseLookProbe
 
-`MouseLookProbe.exe` reproduces the measured mouse-look mechanism without the game. It
-hides the cursor on a button press, warps it to an off-centre anchor and records the summed
-movement of each phase in `mouselook-probe.log`.
+`MouseLookProbe.exe` has three selectable experiment modes to isolate why
+TeamViewer pauses during mouse-look. The original hidden-cursor + warp behavior
+remains the default, including for the automated script.
+
+| Probe mode | Cursor | Repeated `SetCursorPos` | Purpose |
+| --- | --- | --- | --- |
+| A – visible / no warp | visible | no | character-selection-like baseline |
+| B – hidden / no warp | hidden | no | isolate cursor hiding |
+| C – hidden + warp | hidden | yes | original WoW-like mouse-look simulation |
+
+Choose a radio button in the probe window before dragging. Hold the left or right
+mouse button in the empty area, then release before switching modes. Modes A/B use
+ordinary `GetCursorPos` deltas, so keep drags short to avoid the screen edge.
+Each phase records its selected mode in `mouselook-probe.log`. The optional
+`--mode visible|hidden|warp` selects the initial mode; `warp` is the default.
+
+Test A, B and C via TeamViewer first **without RemoteMouseFix targeting the probe**.
+Pauses only in C suggest repeated cursor repositioning; pauses in B and C suggest
+that hiding the cursor contributes. These are indicators rather than proof of
+WoW behavior: the probe is only an approximation of the game's input loop.
 
 [tools/probe/emulate-remote.ps1](tools/probe/emulate-remote.ps1) starts both programs,
 injects a TeamViewer-shaped absolute stream and runs a click without motion, a steady drag

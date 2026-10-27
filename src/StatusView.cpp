@@ -187,16 +187,17 @@ std::vector<StatusView::Line> StatusView::Render() const {
 
     std::vector<Line> lines;
 
-    // ---- the game window ----------------------------------------------------------
+    // ---- selected application -----------------------------------------------------
+    const wchar_t* targetLabel = snapshot_.abTestUi ? L"TARGET" : L"GAME  ";
     switch (snapshot_.game) {
         case GameState::NotRunning:
-            lines.push_back({yellow, L"  GAME  o  " + game + L" is not running yet"});
+            lines.push_back({yellow, std::wstring(L"  ") + targetLabel + L" o  " + game + L" is not running yet"});
             break;
         case GameState::Background:
             lines.push_back({yellow, L"  GAME  o  " + game + L" is running, but another window is in front"});
             break;
         case GameState::Foreground:
-            lines.push_back({green, L"  GAME  *  " + game + L" is in front"});
+            lines.push_back({green, std::wstring(L"  ") + targetLabel + L" *  " + game + L" is in front"});
             break;
     }
 
@@ -242,9 +243,11 @@ std::vector<StatusView::Line> StatusView::Render() const {
     } else if (locked) {
         hint = L"Nothing is being changed. Start-AB-Test.cmd is the profile that corrects.";
     } else if (snapshot_.game == GameState::NotRunning) {
-        hint = L"Start the game now. This panel follows along.";
+        hint = snapshot_.abTestUi ? L"Start the selected application now."
+                                  : L"Start the game now. This panel follows along.";
     } else if (!inFront) {
-        hint = L"Click into the game window; the top line turns green.";
+        hint = snapshot_.abTestUi ? L"Click into the target window; the top line turns green."
+                                  : L"Click into the game window; the top line turns green.";
     } else if (!correcting) {
         hint = L"Press Ctrl+Alt+1 to switch the fix on.";
     } else if (snapshot_.corrections == 0) {

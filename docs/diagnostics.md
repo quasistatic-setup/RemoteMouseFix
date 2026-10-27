@@ -355,7 +355,10 @@ smoothing movement queued against the previous anchor and logs
 An anchor classified in one hold is **never reused as proof** in the next
 hold. Until genuine recenter behavior is observed again, events pass through.
 A temporary loss of correction is safer than suppressing cursor movements
-in a game with no warp. Runtime verification must include moving the WoW
+in a game with no warp. If the sampled cursor remains outside an already
+verified anchor for more than 300 ms (excluding recent own output), the
+classification is revoked, pending movement is discarded, and input passes
+through again (`## STATE warp-evidence revoked`). Runtime verification must include moving the WoW
 window before the next hold, all Probe A/B/C modes, loss of target focus,
 the OFF/relative modes and emergency-off.
 

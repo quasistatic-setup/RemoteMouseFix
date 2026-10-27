@@ -335,41 +335,27 @@ no suppressed moves and normal free cursor movement and that mode C still
 acquires a warp and rotates smoothly. Finish with a WoW Start-Playing.cmd smoke
 test and verify emergency OFF. These runtime tests are required before merging.
 
-## Anchor-recovery experiment (follow-up PR)
+## Verified-anchor recovery
 
-When an existing anchor is wrong after the game window moves or changes its
-recenter position, the old implementation continues suppressing input and cannot
-emit a camera step until the hold ends. The guarded recovery path looks for
-**both** a cursor jump of at least 30 px when the game hides the cursor and a
-stable location in recent (up to 12) state samples: at least eight identical
-screen positions and at least 75% agreement. This reduces the risk of learning
-a random remote mouse location; a stable cursor position alone is not proof of
-recentring. If there is insufficient evidence, output still stays blocked
-rather than guessing.
+If a game changes its recenter position while a hidden-cursor hold is active,
+the sampler must **observe new unexplained return events** at the new point.
+The same multi-event proof used for initial classification applies again;
+an initially hidden cursor, position jump or a stable coordinate alone cannot
+authorize an anchor. Candidate positions that coincide with our recent
+`SendInput` output are ignored, along with a 160 ms quiet period after output.
 
-A sample matching the most recent successful `SendInput` target (within
-2 px) is never admitted to the recent-anchor consensus. Observations during
-the first 160 ms after an own output are also quarantined, and any new
-own output clears the in-progress sample window. At the end of a hold, an
-estimate collected alongside own correction output is not allowed to replace
-an already valid anchor. These checks address a captured false relocation
-exactly 20 px from the real anchor (`kSmoothMaxStepPx`), which was followed
-by a stale-pending reset. A repeated synthetic point is not game warp proof.
+A validated relocation logs `## STATE warp-evidence confirmed` and
+`anchor-learned`. If the new client-relative anchor differs from the old
+one by more than the configured tolerance, the main message loop discards
+smoothing movement queued against the previous anchor and logs
+`## SMOOTH RESET reason=anchor-relearned`. The sampler never sends input.
 
-A successful recovery logs `## STATE anchor-relearned during hold` followed by
-`anchor-learned`. Any remaining smoothing movement queued for the previous
-anchor is dropped on the main message-loop thread with
-`## SMOOTH RESET reason=anchor-relearned` to prevent a large delayed jump.
-No output is sent from the state sampler and the hook's safety gates are
-unchanged.
-
-Windows regression: with TeamViewer and the A/B profile targeting Wow.exe,
-rotate the camera, move the WoW window while the cursor is visible, then drag
-again with the fix ON. An incorrect anchor must recover inside the new hold,
-without a multi-second `off_anchor` run or a burst of old queued motion.
-Repeat without moving the window. Probe A/B/C, relative and OFF modes,
-hotkey emergency-off and loss of focus must still behave correctly.
-**MSVC/CTest alone does not establish runtime safety or mouse-look quality.**
+An anchor classified in one hold is **never reused as proof** in the next
+hold. Until genuine recenter behavior is observed again, events pass through.
+A temporary loss of correction is safer than suppressing cursor movements
+in a game with no warp. Runtime verification must include moving the WoW
+window before the next hold, all Probe A/B/C modes, loss of target focus,
+the OFF/relative modes and emergency-off.
 
 ## High-resolution smoothing A/B experiment (follow-up PR)
 

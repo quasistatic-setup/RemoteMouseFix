@@ -24,6 +24,9 @@ jobs:
       - name: Stage the release layout
         run: cmake --install build --config Release --prefix stage/RemoteMouseFix-win-x64
 
+      - name: Include MouseLookProbe in diagnostic artifact
+        run: Copy-Item build/bin/Release/MouseLookProbe.exe stage/RemoteMouseFix-win-x64/MouseLookProbe.exe
+
       - name: Upload the build output
         uses: actions/upload-artifact@v4
         with:

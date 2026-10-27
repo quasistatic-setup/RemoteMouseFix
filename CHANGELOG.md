@@ -7,6 +7,14 @@ correction is still experimental.
 
 ## [Unreleased]
 
+### Fixed
+
+- Relearn a relocated game warp anchor *during* a hidden-cursor hold only
+  after an onset warp-like transition and a strong 12-sample stable consensus.
+  On significant anchor changes, discard queued smoothing movement from the
+  old coordinate system rather than replay stale camera motion.
+- Add a bounded recent-anchor consensus regression test (also run in CI).
+
 ### Added
 
 - A/B profile enables the optional 250 ms `## TIMING` summary for incoming deltas,

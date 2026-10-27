@@ -28,6 +28,16 @@ public:
         // Learned warp anchor, as an offset inside the target client area so it survives
         // the window being moved.
         std::atomic<bool>  anchorValid   {false};
+        // Explicitly armed only after multiple observed, unexplained recenter
+        // events. Hidden cursor without warp MUST pass through (Probe mode B).
+        std::atomic<bool>  warpVerified  {false};
+
+        // Single hook writer; odd/even version makes the last external injected
+        // move an atomic snapshot for the state sampler, without a lock or I/O.
+        std::atomic<std::uint64_t> remoteVersion {0};
+        std::atomic<long> remoteX {0};
+        std::atomic<long> remoteY {0};
+        std::atomic<std::uint64_t> remoteMs {0};
         std::atomic<long>  anchorOffsetX {0};
         std::atomic<long>  anchorOffsetY {0};
     };

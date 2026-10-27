@@ -43,6 +43,9 @@ jobs:
           $exists = ($LASTEXITCODE -eq 0)
           "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           Write-Host "Release $tag exists=$exists"
+          # gh returns code 1 for a release that does not yet exist. That is
+          # expected here; don't let the shell treat it as a failed step.
+          exit 0
 
       - name: Configure x64 MSVC with warnings as errors
         if: steps.release.outputs.exists == 'false'

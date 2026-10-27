@@ -49,7 +49,3 @@ a more consistent 16 ms smoothing timer and easier target selection.
 For instructions and logs, see the [README](https://github.com/quasistatic-setup/RemoteMouseFix#readme).
 
 **Full changes:** https://github.com/quasistatic-setup/RemoteMouseFix/compare/v0.7.0...v0.8.0
-
-> Maintainer note: publish these notes only together with the two named
-> release assets (`.zip` and `.zip.sha256`), after verifying the ZIP's
-> actual SHA-256 checksum. Do not invent a checksum.

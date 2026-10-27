@@ -7,16 +7,20 @@ correction is still experimental.
 
 ## [Unreleased]
 
+No changes yet.
+
+## [0.8.0] - 2026-10-27
+
 ### Performance
 
-- A/B-only opt-in high-resolution 16 ms waitable timer replaces the low-priority
-  WM_TIMER smoothing cadence. A worker coalesces notifications; SendInput remains
-  exclusively on the original message-loop thread. Falls back to WM_TIMER when
-  unavailable; a runtime timer/post failure stops correction safely.
-- After A/B test measurements (~16.2 ms vs ~26.7 ms per tick), normal Playing
-  now enables the high-resolution timer by default, while remaining switchable
-  back to WM_TIMER through `high_res_smoothing_timer=false`. Playing runtime
-  smoke test is required before merging.
+- A high-resolution 16 ms waitable timer improves smoothing cadence compared
+  with WM_TIMER. Measured A/B timing was approximately 16.2 ms versus 26.7 ms
+  per tick; the user also confirmed smoother WoW gameplay without camera jumps
+  on the selected release commit.
+- Both Playing and A/B profiles enable the high-resolution timer by default.
+  If unavailable, the app falls back to WM_TIMER; setting
+  `high_res_smoothing_timer=false` explicitly restores WM_TIMER.
+  SendInput remains on the original message-loop thread.
 
 ### Fixed
 
@@ -25,6 +29,8 @@ correction is still experimental.
   On significant anchor changes, discard queued smoothing movement from the
   old coordinate system rather than replay stale camera motion.
 - Add a bounded recent-anchor consensus regression test (also run in CI).
+  This is the WoW-tested implementation, **not** the later experimental
+  WarpEvidence gate, which was excluded after regressions in actual gameplay.
 
 ### Added
 
@@ -32,7 +38,6 @@ correction is still experimental.
   timer gaps, blocked anchor gates and queued movement. Normal playing remains unchanged.
 - A/B diagnostic logs are isolated in `logs-ab/` with up to 50 retained files;
   game logs remain in `logs/`. Back up original captures outside rotating folders.
-
 
 - MouseLookProbe now provides visible/no-warp, hidden/no-warp and hidden/warp
   modes to distinguish cursor hiding from cursor repositioning. The original
@@ -42,6 +47,10 @@ correction is still experimental.
   Select by executable filename or a full absolute path (exact process-image
   match). Missing or invalid INI settings fail safely before correction.
   The tool does not launch the configured game.
+- Document that the corrected input path is tested for WoW-style cursor
+  recentering only. Hidden-cursor/no-warp applications (Probe B) are not
+  supported with correction on: remote movement may be withheld without
+  successful reproduction. Use diagnostic-only mode for unknown targets.
 - The A/B console displays Ctrl+Alt+M, the number of markers written and all
   correction/diagnostic hotkeys.
 - The CI diagnostic artifact includes MouseLookProbe.exe for direct tests.
@@ -126,7 +135,8 @@ Phase 1, observation only.
   TeamViewer-shaped absolute input stream.
 - Dated measurement report in [docs/findings-2026-09-12.md](docs/findings-2026-09-12.md).
 
-[Unreleased]: https://github.com/quasistatic-setup/RemoteMouseFix/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/quasistatic-setup/RemoteMouseFix/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/quasistatic-setup/RemoteMouseFix/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/quasistatic-setup/RemoteMouseFix/releases/tag/v0.7.0
 [0.6.0]: https://github.com/quasistatic-setup/RemoteMouseFix/releases/tag/v0.6.0
 [0.2.0]: https://github.com/quasistatic-setup/RemoteMouseFix/commit/cafe36a

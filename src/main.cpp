@@ -42,6 +42,7 @@
 #include <cwchar>
 #include <memory>
 #include <mutex>
+#include <system_error>
 #include <string>
 #include <thread>
 #include <vector>
@@ -75,6 +76,7 @@ constexpr HotkeySpec kHotkeys[] = {
 
 constexpr UINT kMsgQuitRequested = WM_APP + 1;
 constexpr UINT kMsgApplyDelta    = WM_APP + 2; // posted by the hook: wParam = dx, lParam = dy
+constexpr UINT kMsgSmoothTick    = WM_APP + 3; // coalesced high-res timer tick, main thread only
 constexpr UINT_PTR kSmoothTimer  = 1;
 constexpr UINT kSmoothIntervalMs = 16;
 constexpr long kSmoothMaxStepPx  = 20;
@@ -1032,8 +1034,71 @@ int main() {
         }
     };
 
-    const UINT_PTR smoothTimerId = SetTimer(nullptr, kSmoothTimer, kSmoothIntervalMs, nullptr);
-    if (smoothTimerId == 0) {
+    // Windows WM_TIMER is low priority and was measured around 27 ms/tick despite a
+    // 16 ms requested period. An opt-in high-resolution waitable timer produces at
+    // most ONE outstanding thread message; the actual cursor output remains here on
+    // the message-loop/hook thread. Do not change system-wide timer resolution.
+    HANDLE highResTimer = nullptr;
+    std::thread highResWorker;
+    std::atomic<bool> stopHighResWorker {false};
+    std::atomic<bool> highResTickQueued {false};
+    std::atomic<bool> highResTimerFailed {false};
+    if (cfg.highResSmoothingTimer) {
+        highResTimer = CreateWaitableTimerExW(
+            nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+            TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (highResTimer) {
+            LARGE_INTEGER firstDue {};
+            firstDue.QuadPart = -static_cast<LONGLONG>(kSmoothIntervalMs) * 10000;
+            if (!SetWaitableTimer(highResTimer, &firstDue,
+                                  static_cast<LONG>(kSmoothIntervalMs),
+                                  nullptr, nullptr, FALSE)) {
+                CloseHandle(highResTimer);
+                highResTimer = nullptr;
+            }
+        }
+        if (highResTimer) {
+            // Ensure PostThreadMessage always has an existing message queue.
+            MSG initialQueueMessage {};
+            PeekMessageW(&initialQueueMessage, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+            try {
+                highResWorker = std::thread([&] {
+                    while (!stopHighResWorker.load(std::memory_order_acquire) &&
+                           g_running.load(std::memory_order_relaxed)) {
+                        const DWORD waited = WaitForSingleObject(highResTimer, 100);
+                        if (stopHighResWorker.load(std::memory_order_acquire)) break;
+                        if (waited == WAIT_TIMEOUT) continue;
+                        if (waited != WAIT_OBJECT_0) {
+                            highResTimerFailed.store(true, std::memory_order_release);
+                            RequestStop(); // fail closed if the timer breaks during a hold
+                            break;
+                        }
+                        if (!highResTickQueued.exchange(true, std::memory_order_acq_rel) &&
+                            !PostThreadMessageW(g_mainThreadId, kMsgSmoothTick, 0, 0)) {
+                            highResTickQueued.store(false, std::memory_order_release);
+                            highResTimerFailed.store(true, std::memory_order_release);
+                            RequestStop();
+                            break;
+                        }
+                    }
+                });
+            } catch (const std::system_error&) {
+                CancelWaitableTimer(highResTimer);
+                CloseHandle(highResTimer);
+                highResTimer = nullptr;
+            }
+        }
+        if (!highResTimer) {
+            LogLine(L"# CONFIG WARNING : high-resolution smoothing timer unavailable; "
+                    L"falling back to WM_TIMER");
+        }
+    }
+    const UINT_PTR smoothTimerId = highResTimer ? 0 :
+        SetTimer(nullptr, kSmoothTimer, kSmoothIntervalMs, nullptr);
+    const bool smoothTimerAvailable = highResTimer || smoothTimerId != 0;
+    LogLine(highResTimer ? L"## SMOOTH TIMER source=high-res-waitable period_ms=16" :
+                           L"## SMOOTH TIMER source=wm-timer period_ms=16");
+    if (!smoothTimerAvailable) {
         LogLine(L"# CONFIG WARNING : smoothing timer unavailable; absolute mode uses immediate output");
     }
     MSG msg {};
@@ -1072,7 +1137,7 @@ int main() {
                 ++timing.incoming;
                 timingLastInputMs = qpcNowMs();
             }
-            if (mode == rmf::CorrectionMode::Absolute && smoothTimerId != 0) {
+            if (mode == rmf::CorrectionMode::Absolute && smoothTimerAvailable) {
                 if (cfg.traceCorrectionTiming && smoothPendingX == 0 && smoothPendingY == 0) {
                     timingPendingSinceMs = qpcNowMs();
                 }
@@ -1101,7 +1166,12 @@ int main() {
             continue;
         }
 
-        if (msg.message == WM_TIMER && msg.wParam == smoothTimerId) {
+        if ((smoothTimerId != 0 && msg.message == WM_TIMER &&
+             msg.wParam == smoothTimerId) ||
+            (highResTimer && msg.message == kMsgSmoothTick)) {
+            if (msg.message == kMsgSmoothTick) {
+                highResTickQueued.store(false, std::memory_order_release);
+            }
             if (cfg.traceCorrectionTiming) {
                 const bool active = correction.Mode() == rmf::CorrectionMode::Absolute &&
                                     cursorHeldByTarget.load(std::memory_order_relaxed);
@@ -1249,8 +1319,13 @@ int main() {
     }
 
     // ---- shutdown ------------------------------------------------------------------------
-    if (smoothTimerId != 0) {
-        KillTimer(nullptr, smoothTimerId);
+    if (smoothTimerId != 0) KillTimer(nullptr, smoothTimerId);
+    stopHighResWorker.store(true, std::memory_order_release);
+    if (highResTimer) CancelWaitableTimer(highResTimer);
+    if (highResWorker.joinable()) highResWorker.join();
+    if (highResTimer) CloseHandle(highResTimer);
+    if (highResTimerFailed.load(std::memory_order_acquire)) {
+        LogLine(L"## SMOOTH TIMER FAILED: stopped correction rather than continuing without ticks");
     }
     g_running.store(false);
     correction.ForceOff();

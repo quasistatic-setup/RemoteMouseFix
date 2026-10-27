@@ -88,9 +88,10 @@ the fix stopped itself.
   KEYS     Ctrl+Alt+M MARK | Ctrl+Alt+P pause log | Ctrl+Alt+Q quit
 ```
 
-`GAME` is yellow while the game is not running or while another window is in front: the
-fix only works on the window you are actually playing in, so clicking into the game is
-what turns this line green. `FIX` turns red when a watchdog switched the correction off,
+`TARGET` in A/B mode (or `GAME` in the normal profile) is yellow while the
+selected executable is not running or another window is in front. The fix only
+works while that target window is in the foreground, so switching to it turns
+the line green. `FIX` turns red when a watchdog switched the correction off,
 and then says why; that state stays on screen instead of scrolling away. `NEXT` always
 names the one thing to do next.
 

@@ -346,6 +346,7 @@ int main() {
         header.push_back(L"# config file    : " + (cfg.loadedFrom.empty() ? L"<defaults>" : cfg.loadedFrom));
         header.push_back(L"# target process : " + cfg.targetProcess);
         header.push_back(L"# log mouse moves: " + std::wstring(cfg.logMouseMoves ? L"yes" : L"no"));
+        header.push_back(L"# A/B panel      : " + std::wstring(cfg.showAbTestUi ? L"on" : L"off"));
         header.push_back(L"# diagnostic mode: " + std::wstring(cfg.diagnosticMode ? L"yes" : L"no"));
         header.push_back(L"# correction     : " +
                          (correction.allowed
@@ -418,6 +419,7 @@ int main() {
         rmf::StatusSnapshot initial;
         initial.targetProcess     = cfg.targetProcess;
         initial.correctionAllowed = correction.allowed;
+        initial.abTestUi          = cfg.showAbTestUi;
         initial.lockReason        = lockHint;
         initial.game              = rmf::IsProcessRunning(cfg.targetProcess)
                                         ? rmf::GameState::Background
@@ -620,6 +622,7 @@ int main() {
     std::atomic<std::uint64_t> anchorCount   {0};
     std::atomic<std::uint64_t> jumpCount     {0};
     std::atomic<std::uint64_t> injectedCount {0};
+    std::atomic<unsigned> markerCount {0};
 
     std::thread writer([&] {
         rmf::ProcessNameCache names(cfg.targetProcess);
@@ -733,6 +736,8 @@ int main() {
                 snap.targetProcess     = cfg.targetProcess;
                 snap.loggingPaused     = filter.paused.load();
                 snap.correctionAllowed = correction.allowed;
+                snap.abTestUi          = cfg.showAbTestUi;
+                snap.markers           = markerCount.load(std::memory_order_relaxed);
                 snap.mode              = correction.Mode();
                 snap.lockReason        = lockHint;
                 {
@@ -817,7 +822,6 @@ int main() {
     // ---- message loop --------------------------------------------------------------------
     // WH_MOUSE_LL callbacks are delivered on this thread, so this loop drives the hook and
     // must stay responsive. It also executes the correction output posted by the hook.
-    unsigned markerCounter = 0;
     long long smoothPendingX = 0;
     long long smoothPendingY = 0;
 
@@ -957,16 +961,16 @@ int main() {
         if (msg.message == WM_HOTKEY) {
             switch (static_cast<int>(msg.wParam)) {
                 case kHotkeyMarker: {
-                    ++markerCounter;
+                    const unsigned markerNumber = markerCount.fetch_add(1, std::memory_order_relaxed) + 1;
                     const rmf::StateSampler::Snapshot snap = sampler.Current();
                     LogLine(Format(L"## MARKER #%u at cursor=(%ld,%ld) cursor_visible=%ls clip=%ls correction=%ls",
-                                   markerCounter, snap.cursorPos.x, snap.cursorPos.y,
+                                   markerNumber, snap.cursorPos.x, snap.cursorPos.y,
                                    snap.cursorVisible ? L"yes" : L"no",
                                    snap.clipIsFullScreen ? L"released" : L"CONFINED",
                                    modeLabel()));
                     FlushLog();
                     panel.Notice(rmf::NoticeLevel::Info,
-                                 Format(L"marker #%u written to the log", markerCounter));
+                                 Format(L"marker #%u written to the log", markerNumber));
                     break;
                 }
                 case kHotkeyPause: {

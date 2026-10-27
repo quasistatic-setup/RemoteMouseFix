@@ -26,6 +26,7 @@
 #include "rmf/Logger.h"
 #include "rmf/MouseHook.h"
 #include "rmf/ProcessInfo.h"
+#include "rmf/RecentWarpAnchor.h"
 #include "rmf/StateSampler.h"
 #include "rmf/StatusView.h"
 #include "rmf/WinCompat.h"
@@ -532,6 +533,13 @@ int main() {
 
     // Sampler thread only.
     rmf::AnchorLearner anchorLearner;
+    rmf::RecentWarpAnchor recentAnchor;
+    // Relearning changes the reference for outstanding smoothing steps: main thread
+    // discards the stale backlog before emitting another corrected move.
+    std::atomic<std::uint32_t> anchorRevision {0};
+    bool          haveLastShownCursor = false;
+    POINT         lastShownCursor {0, 0};
+    bool          sawWarpAtHoldStart = false;
     bool          holdPhaseOpen    = false;
     RECT          holdPhaseClient  {0, 0, 0, 0};
     ULONGLONG     hiddenSince      = 0;
@@ -540,12 +548,19 @@ int main() {
     auto publishAnchor = [&](POINT anchor, unsigned hits, unsigned total, RECT client) {
         const long offsetX = anchor.x - client.left;
         const long offsetY = anchor.y - client.top;
-        const bool changed = !filter.anchorValid.load() ||
-                             filter.anchorOffsetX.load() != offsetX ||
-                             filter.anchorOffsetY.load() != offsetY;
-        filter.anchorOffsetX.store(offsetX);
-        filter.anchorOffsetY.store(offsetY);
-        filter.anchorValid.store(true);
+        const bool hadAnchor = filter.anchorValid.load(std::memory_order_relaxed);
+        const long previousX = filter.anchorOffsetX.load(std::memory_order_relaxed);
+        const long previousY = filter.anchorOffsetY.load(std::memory_order_relaxed);
+        const bool changed = !hadAnchor || previousX != offsetX || previousY != offsetY;
+        const bool relocated = hadAnchor &&
+            (std::labs(previousX - offsetX) > cfg.anchorTolerancePx ||
+             std::labs(previousY - offsetY) > cfg.anchorTolerancePx);
+        // Make the two coordinate stores appear as one valid anchor to the main loop.
+        filter.anchorValid.store(false, std::memory_order_release);
+        filter.anchorOffsetX.store(offsetX, std::memory_order_relaxed);
+        filter.anchorOffsetY.store(offsetY, std::memory_order_relaxed);
+        filter.anchorValid.store(true, std::memory_order_release);
+        if (relocated) anchorRevision.fetch_add(1, std::memory_order_release);
         if (changed && cfg.logStateChanges) {
             LogLine(Format(L"## STATE anchor-learned=(%ld,%ld) client_offset=(%ld,%ld) hits=%u/%u",
                            anchor.x, anchor.y, offsetX, offsetY, hits, total));
@@ -584,6 +599,16 @@ int main() {
             cursorHeldByTarget.store(holding, std::memory_order_relaxed);
 
             if (holding) {
+                // A warp-like discontinuity when the cursor becomes hidden is
+                // independent evidence of recentering. Stable positions alone are
+                // insufficient (Probe mode B can keep the cursor perfectly still).
+                if (!holdPhaseOpen) {
+                    recentAnchor.Reset();
+                    sawWarpAtHoldStart = haveLastShownCursor &&
+                        (std::labs(now.cursorPos.x - lastShownCursor.x) >= 30 ||
+                         std::labs(now.cursorPos.y - lastShownCursor.y) >= 30);
+                }
+                recentAnchor.Add(now.cursorPos);
                 const ULONGLONG tick = GetTickCount64();
                 const std::uint32_t generation = correction.generation.load();
                 if (!holdPhaseOpen || generation != hiddenGeneration) {
@@ -603,6 +628,33 @@ int main() {
                     publishAnchor(liveAnchor, liveHits, liveTotal, now.clientScreenRect);
                 }
 
+                // A previous game anchor can become stale after moving the window or
+                // changing the game's camera mode. Accept a NEW location only after
+                // both an onset warp and a strong, recent 12-sample consensus.
+                // No output is issued from this sampler thread.
+                POINT candidate {};
+                unsigned candidateHits = 0, candidateSamples = 0;
+                if (sawWarpAtHoldStart &&
+                    correction.Mode() == rmf::CorrectionMode::Absolute &&
+                    filter.anchorValid.load(std::memory_order_relaxed) &&
+                    recentAnchor.Stable(candidate, candidateHits, candidateSamples)) {
+                    const long expectedX = now.clientScreenRect.left +
+                        filter.anchorOffsetX.load(std::memory_order_relaxed);
+                    const long expectedY = now.clientScreenRect.top +
+                        filter.anchorOffsetY.load(std::memory_order_relaxed);
+                    if (std::labs(candidate.x - expectedX) > cfg.anchorTolerancePx ||
+                        std::labs(candidate.y - expectedY) > cfg.anchorTolerancePx) {
+                        if (cfg.logStateChanges) {
+                            LogLine(Format(
+                                L"## STATE anchor-relearned during hold: previous=(%ld,%ld) "
+                                L"candidate=(%ld,%ld) hits=%u/%u (warp transition observed)",
+                                expectedX, expectedY, candidate.x, candidate.y,
+                                candidateHits, candidateSamples));
+                        }
+                        publishAnchor(candidate, candidateHits, candidateSamples, now.clientScreenRect);
+                    }
+                }
+
                 if (cfg.watchdogMaxHiddenMs > 0 &&
                     correction.Mode() != rmf::CorrectionMode::Off &&
                     tick - hiddenSince > cfg.watchdogMaxHiddenMs) {
@@ -612,10 +664,18 @@ int main() {
                 return;
             }
 
+            if (targetInForeground.load(std::memory_order_relaxed) && now.cursorVisible) {
+                lastShownCursor = now.cursorPos;
+                haveLastShownCursor = true;
+            } else {
+                haveLastShownCursor = false;
+            }
             if (!holdPhaseOpen) {
                 return;
             }
             holdPhaseOpen = false;
+            sawWarpAtHoldStart = false;
+            recentAnchor.Reset();
 
             POINT anchor {};
             unsigned hits = 0, total = 0;
@@ -896,6 +956,7 @@ int main() {
     // must stay responsive. It also executes the correction output posted by the hook.
     long long smoothPendingX = 0;
     long long smoothPendingY = 0;
+    std::uint32_t lastAnchorRevision = anchorRevision.load(std::memory_order_acquire);
 
     // Opt-in A/B diagnostics. These counters belong to the message-loop thread; the
     // mouse hook does no additional work and logging is limited to one summary per 250 ms.
@@ -984,6 +1045,18 @@ int main() {
 
         if (msg.message == kMsgQuitRequested) {
             break;
+        }
+
+        const auto observedRevision = anchorRevision.load(std::memory_order_acquire);
+        if (observedRevision != lastAnchorRevision) {
+            lastAnchorRevision = observedRevision;
+            if (smoothPendingX || smoothPendingY) {
+                LogLine(Format(L"## SMOOTH RESET reason=anchor-relearned discarded=(%+lld,%+lld)",
+                               smoothPendingX, smoothPendingY));
+            }
+            smoothPendingX = 0;
+            smoothPendingY = 0;
+            timingPendingSinceMs = 0;
         }
 
         if (msg.message == kMsgApplyDelta) {

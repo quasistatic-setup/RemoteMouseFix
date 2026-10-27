@@ -220,7 +220,7 @@ int main() {
                     ConsoleOut(L"RemoteMouseFix %ls - diagnostics with optional correction\n\n"
                                L"Usage: RemoteMouseFix.exe [path\\to\\config.json] [--seconds N]\n\n"
                                L"  --seconds N  stop automatically after N seconds (0 = run until stopped)\n"
-                               L"  A/B target is read from AB-Test.ini beside the executable.\n\n"
+                               L"  A/B and Playing targets are read from RemoteMouseFix.ini.\n\n"
                                L"Hotkeys while running:\n"
                                L"  Ctrl+Alt+M   write a marker line into the log\n"
                                L"  Ctrl+Alt+P   pause / resume logging (correction keeps running)\n"
@@ -262,38 +262,71 @@ int main() {
     rmf::Config cfg;
     rmf::LoadConfig(configPath, cfg);
 
-    // The A/B profile alone may select a different target through a simple INI file.
-    // Keep the executable basename validation: all original foreground, hidden-cursor
-    // and injected-input safety gates remain unchanged. Nothing starts the target EXE.
-    if (cfg.showAbTestUi) {
-        const std::wstring iniPath = rmf::ResolveAgainstExeDir(L"AB-Test.ini");
+    // Each gameplay profile opts into its own section of the common INI. A full
+    // path is matched against the running process image, not used to launch it.
+    // Missing/invalid INI fails closed before installing a mouse hook.
+    if (!cfg.targetIniSection.empty()) {
+        const std::wstring iniPath = rmf::ResolveAgainstExeDir(L"RemoteMouseFix.ini");
         if (!FileExists(iniPath)) {
-            ConsoleOut(L"ERROR: AB-Test.ini is missing beside RemoteMouseFix.exe.\n"
-                       L"       Restore it from the test package; no correction started.\n");
+            ConsoleOut(L"ERROR: RemoteMouseFix.ini is missing beside RemoteMouseFix.exe.\n"
+                       L"       Restore it from the package; no correction started.\n");
             return 2;
         }
-
-        wchar_t selected[260] {};
-        const DWORD len = GetPrivateProfileStringW(
-            L"Target", L"Executable", L"", selected, 260, iniPath.c_str());
+        wchar_t selected[32768] {};
+        const DWORD len = GetPrivateProfileStringW(cfg.targetIniSection.c_str(),
+            L"Executable", L"", selected, 32768, iniPath.c_str());
         const std::wstring target(selected, static_cast<std::size_t>(len));
-        const bool invalidCharacters = std::any_of(target.begin(), target.end(), [](wchar_t ch) {
-            return ch < 32 || ch == L'<' || ch == L'>' || ch == L':' ||
-                   ch == L'"' || ch == L'/' || ch == L'\\' || ch == L'|' ||
-                   ch == L'?' || ch == L'*';
-        });
-        const bool valid = target.size() >= 5 && target.size() <= 255 &&
-                           !invalidCharacters &&
-                           target.front() != L' ' && target.back() != L' ' &&
-                           CompareStringOrdinal(target.c_str() + target.size() - 4, 4,
-                                                L".exe", 4, TRUE) == CSTR_EQUAL;
-        if (!valid) {
-            ConsoleOut(L"ERROR: invalid [Target] Executable in AB-Test.ini.\n"
-                       L"       Enter a filename like Wow.exe or MouseLookProbe.exe (no path).\n");
+        if (target.empty() || len >= 32767) {
+            ConsoleOut(L"ERROR: [%ls] Executable in RemoteMouseFix.ini is missing or too long.\n",
+                       cfg.targetIniSection.c_str());
             return 2;
         }
-        cfg.targetProcess = target;
-        ConsoleOut(L"  A/B target (AB-Test.ini): %ls\n", cfg.targetProcess.c_str());
+        const bool invalidCharacters = std::any_of(target.begin(), target.end(), [](wchar_t ch) {
+            return ch < 32 || ch == L'<' || ch == L'>' || ch == L'"' ||
+                   ch == L'|' || ch == L'?' || ch == L'*';
+        });
+        const bool hasPathSeparator = target.find_first_of(L"\\/") != std::wstring::npos;
+        const bool absoluteDrivePath =
+            target.size() >= 6 && ((target[0] >= L'A' && target[0] <= L'Z') ||
+                                     (target[0] >= L'a' && target[0] <= L'z')) &&
+            target[1] == L':' && (target[2] == L'\\' || target[2] == L'/');
+        const bool uncPath = target.size() >= 7 &&
+            (target[0] == L'\\' || target[0] == L'/') &&
+            (target[1] == L'\\' || target[1] == L'/');
+        const bool hasPath = hasPathSeparator || target.find(L':') != std::wstring::npos;
+        if (invalidCharacters || target.front() == L' ' || target.back() == L' ' ||
+            (hasPath && !(absoluteDrivePath || uncPath)) || target.back() == L'\\' ||
+            target.back() == L'/') {
+            ConsoleOut(L"ERROR: invalid [%ls] Executable in RemoteMouseFix.ini.\n"
+                       L"       Use Name.exe or a full absolute path such as C:\\Games\\MyGame.exe.\n",
+                       cfg.targetIniSection.c_str());
+            return 2;
+        }
+        std::wstring filename = target;
+        if (hasPath) {
+            // Normalize relative components such as ".." in a configured absolute path.
+            std::wstring expanded(32768, L'\0');
+            const DWORD size = GetFullPathNameW(target.c_str(),
+                static_cast<DWORD>(expanded.size()), expanded.data(), nullptr);
+            if (size == 0 || size >= expanded.size()) {
+                ConsoleOut(L"ERROR: cannot resolve target path in RemoteMouseFix.ini.\n");
+                return 2;
+            }
+            expanded.resize(size);
+            std::replace(expanded.begin(), expanded.end(), L'/', L'\\');
+            cfg.targetPath = std::move(expanded);
+            filename = cfg.targetPath.substr(cfg.targetPath.find_last_of(L"\\/") + 1);
+        }
+        if (filename.size() < 5 ||
+            CompareStringOrdinal(filename.c_str() + filename.size() - 4, 4,
+                                 L".exe", 4, TRUE) != CSTR_EQUAL ||
+            filename.find_first_of(L":\\/") != std::wstring::npos) {
+            ConsoleOut(L"ERROR: [%ls] target must end with an .exe filename.\n",
+                       cfg.targetIniSection.c_str());
+            return 2;
+        }
+        cfg.targetProcess = filename;
+        ConsoleOut(L"  target from [%ls]: %ls\n", cfg.targetIniSection.c_str(), target.c_str());
     }
 
     SetConsoleTitleW(cfg.diagnosticMode
@@ -380,6 +413,7 @@ int main() {
         header.push_back(L"# elevated       : " + std::wstring(elevated ? L"yes" : L"no"));
         header.push_back(L"# config file    : " + (cfg.loadedFrom.empty() ? L"<defaults>" : cfg.loadedFrom));
         header.push_back(L"# target process : " + cfg.targetProcess);
+        if (!cfg.targetPath.empty()) header.push_back(L"# target image   : " + cfg.targetPath);
         header.push_back(L"# log mouse moves: " + std::wstring(cfg.logMouseMoves ? L"yes" : L"no"));
         header.push_back(L"# A/B panel      : " + std::wstring(cfg.showAbTestUi ? L"on" : L"off"));
         header.push_back(L"# diagnostic mode: " + std::wstring(cfg.diagnosticMode ? L"yes" : L"no"));
@@ -433,6 +467,7 @@ int main() {
     }
 
     ConsoleOut(L"  target process : %ls\n", cfg.targetProcess.c_str());
+    if (!cfg.targetPath.empty()) ConsoleOut(L"  target image   : %ls\n", cfg.targetPath.c_str());
     ConsoleOut(L"  config file    : %ls\n",
                cfg.loadedFrom.empty() ? L"<defaults>" : cfg.loadedFrom.c_str());
     ConsoleOut(L"  run profile    : %ls\n",
@@ -456,7 +491,7 @@ int main() {
         initial.correctionAllowed = correction.allowed;
         initial.abTestUi          = cfg.showAbTestUi;
         initial.lockReason        = lockHint;
-        initial.game              = rmf::IsProcessRunning(cfg.targetProcess)
+        initial.game              = rmf::IsProcessRunning(cfg.targetProcess, cfg.targetPath)
                                         ? rmf::GameState::Background
                                         : rmf::GameState::NotRunning;
         panel.Start(cfg.consoleStatusIntervalMs > 0, initial);
@@ -489,7 +524,7 @@ int main() {
     };
 
     // ---- state sampler -----------------------------------------------------------------
-    rmf::ProcessNameCache samplerNames(cfg.targetProcess);
+    rmf::ProcessNameCache samplerNames(cfg.targetProcess, cfg.targetPath);
     std::atomic<bool> targetInForeground {false};
     std::atomic<bool> cursorHeldByTarget {false};
 
@@ -660,7 +695,7 @@ int main() {
     std::atomic<unsigned> markerCount {0};
 
     std::thread writer([&] {
-        rmf::ProcessNameCache names(cfg.targetProcess);
+        rmf::ProcessNameCache names(cfg.targetProcess, cfg.targetPath);
 
         POINT previousPt {0, 0};
         bool  havePrevious = false;
@@ -787,7 +822,7 @@ int main() {
                     // "has the game been started at all" changes slowly.
                     const ULONGLONG tick = GetTickCount64();
                     if (lastProcessScan == 0 || tick - lastProcessScan >= 2000) {
-                        gameRunning     = rmf::IsProcessRunning(cfg.targetProcess);
+                        gameRunning     = rmf::IsProcessRunning(cfg.targetProcess, cfg.targetPath);
                         lastProcessScan = tick;
                     }
                     snap.game = gameRunning ? rmf::GameState::Background : rmf::GameState::NotRunning;

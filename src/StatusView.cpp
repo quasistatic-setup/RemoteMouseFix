@@ -228,6 +228,11 @@ std::vector<StatusView::Line> StatusView::Render() const {
     }
     lines.push_back({snapshot_.problems > 0 ? yellow : grey, work});
 
+    if (snapshot_.abTestUi) {
+        lines.push_back({grey, L"  MARK  #" + std::to_wstring(snapshot_.markers) +
+                               L"  Ctrl+Alt+M = mark the start of a test section in the log"});
+    }
+
     // ---- the one line that says what to do next -------------------------------------
     std::wstring    hint;
     const wchar_t*  hintColour = grey;
@@ -249,11 +254,14 @@ std::vector<StatusView::Line> StatusView::Render() const {
     }
     lines.push_back({hintColour, L"  NEXT  >  " + hint});
 
-    lines.push_back({grey, snapshot_.correctionAllowed
-                               ? L"  KEYS     Ctrl+Alt+1 fix on | Ctrl+Alt+C fix off | "
-                                 L"Ctrl+Alt+P pause log | Ctrl+Alt+Q quit"
-                               : L"  KEYS     Ctrl+Alt+M mark the log | Ctrl+Alt+P pause log | "
-                                 L"Ctrl+Alt+Q quit"});
+    if (snapshot_.abTestUi) {
+        lines.push_back({grey, L"  MODES    Ctrl+Alt+1 absolute | Ctrl+Alt+2 relative | Ctrl+Alt+C OFF"});
+        lines.push_back({grey, L"  KEYS     Ctrl+Alt+M MARK | Ctrl+Alt+P pause log | Ctrl+Alt+Q quit"});
+    } else {
+        lines.push_back({grey, snapshot_.correctionAllowed
+                                   ? L"  KEYS     Ctrl+Alt+1 fix on | Ctrl+Alt+2 relative | Ctrl+Alt+C fix off"
+                                   : L"  KEYS     Ctrl+Alt+M mark log | Ctrl+Alt+P pause log | Ctrl+Alt+Q quit"});
+    }
 
     return lines;
 }

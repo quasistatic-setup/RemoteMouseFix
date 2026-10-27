@@ -303,6 +303,38 @@ Before repeating tests, copy important captures into a separate folder that does
 contain the `remotemousefix-*.log` rotation target. Preserve the raw timestamps, and
 do not commit session logs to Git.
 
+## Warp-evidence gate: hidden cursor without recenter (mode B)
+
+**Safety requirement:** A hidden cursor alone is not sufficient to intercept
+remote mouse input. The prior heuristic would suppress every injected move in
+MouseLookProbe mode B and then fail the anchor gate: measured 1,661 suppressed
+moves, five applied corrections, 1,476 off-anchor timer skips and a maximum
+5.48 s pending age. The 16 ms high-resolution timer was not at fault.
+
+Now the hook passes injected moves through untouched **until** the state
+sampler observes multiple unexplained returns to the same interior cursor
+point, while a series of distinct remote inputs aims elsewhere. Evidence
+must include at least two observed away-then-back transitions, five distinct
+remote events, remote travel of at least 60 px and an 80 ms observation span.
+Window/desktop edges and locations recently affected by our own SendInput are
+excluded. Mere stillness or a jump when the cursor first hides never qualifies.
+After a confirmed recenter event, correction may begin for that hold only.
+Evidence and permission are reset on hold end, target focus loss or mode change.
+
+A successful classification logs `## STATE warp-evidence confirmed`.
+Without this line, no mouse move should be tagged `DROP` in mode B.
+For mode C, expect the line followed by `anchor-learned`, actual
+`APPLY` and `OWN` movements, and continued 16 ms smoothing.
+This is a conservative heuristic, **not** a direct Win32 notification that a
+game called SetCursorPos; if samples cannot establish a warp, the fix
+intentionally leaves the input alone. Do not weaken this behavior to make
+a missed recenter look like a successful correction.
+
+Run all Probe modes over TeamViewer with Fix OFF and ON. Confirm mode B has
+no suppressed moves and normal free cursor movement and that mode C still
+acquires a warp and rotates smoothly. Finish with a WoW Start-Playing.cmd smoke
+test and verify emergency OFF. These runtime tests are required before merging.
+
 ## Anchor-recovery experiment (follow-up PR)
 
 When an existing anchor is wrong after the game window moves or changes its

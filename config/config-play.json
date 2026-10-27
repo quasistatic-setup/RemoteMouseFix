@@ -22,6 +22,10 @@
   "anchor_tolerance_px": 3,
   "state_poll_interval_ms": 10,
   "log_state_changes": true,
+
+  "_high_res_smoothing_timer": "Use 16ms high-resolution waitable timer, with WM_TIMER fallback if unsupported. Validated in A/B profile, enabled for Playing trial.",
+  "high_res_smoothing_timer": true,
+
   "console_status_interval_ms": 2000,
   "heartbeat_interval_ms": 10000
 }

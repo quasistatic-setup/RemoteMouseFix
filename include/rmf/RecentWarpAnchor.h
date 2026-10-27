@@ -3,6 +3,8 @@
 #include <windows.h>
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 
 namespace rmf {
 
@@ -14,6 +16,27 @@ public:
     void Reset() {
         count_ = 0;
         next_ = 0;
+        observedOwnCount_ = 0;
+    }
+
+    // Keep only samples collected during a quiet interval without our SendInput
+    // output. OWN cursor locations are not independent evidence of a game warp.
+    // Returns true only when the sample was admitted to the consensus window.
+    bool Observe(POINT point, std::uint64_t ownCount, POINT lastOwnTarget,
+                 std::uint64_t nowMs, std::uint64_t lastOwnOutputMs) {
+        const bool outputChanged = ownCount != observedOwnCount_;
+        observedOwnCount_ = ownCount;
+        const bool recentlyOutput = lastOwnOutputMs != 0 &&
+            (nowMs < lastOwnOutputMs || nowMs - lastOwnOutputMs < 160);
+        const bool atOwnTarget = ownCount != 0 &&
+            std::labs(point.x - lastOwnTarget.x) <= 2 &&
+            std::labs(point.y - lastOwnTarget.y) <= 2;
+        if (outputChanged || recentlyOutput || atOwnTarget) {
+            ClearSamples();
+            return false;
+        }
+        Add(point);
+        return true;
     }
 
     void Add(POINT point) {
@@ -42,9 +65,15 @@ public:
     }
 
 private:
+    void ClearSamples() {
+        count_ = 0;
+        next_ = 0;
+    }
+
     std::array<POINT, 12> samples_ {};
     std::size_t count_ = 0;
     std::size_t next_ = 0;
+    std::uint64_t observedOwnCount_ = 0;
 };
 
 } // namespace rmf

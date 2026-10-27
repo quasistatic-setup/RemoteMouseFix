@@ -1,10 +1,9 @@
 // MouseLookProbe - stand-in for a game's mouse-look loop, used to test RemoteMouseFix
 // without the game.
 //
-// It reproduces the mechanism measured in WoW 3.3.5a (docs/findings-2026-09-12.md): on a
-// button press it hides the cursor and warps it to a fixed, deliberately off-centre
-// anchor; on a timer it reads the distance from that anchor as camera movement and warps
-// back; on release it restores the cursor. Every phase is summarised in a log file.
+// The original mode reproduces the WoW 3.3.5a cursor-warp mechanism
+// (docs/findings-2026-09-12.md). Two additional modes isolate cursor visibility
+// from cursor warping to compare TeamViewer behavior. All phases are logged.
 //
 // It reads the pointer through GetCursorPos. A game reading Raw Input would behave
 // differently, so a pass here proves the correction logic, not compatibility with a
@@ -109,7 +108,8 @@ POINT AnchorScreen() {
     return anchor;
 }
 
-// One "frame" of mouse-look: read the offset from the anchor, consume it, warp back.
+// One sample: modes A/B read ordinary pointer deltas; mode C reads from its
+// anchor and warps back as the game's camera loop does.
 long long QpcMs() {
     LARGE_INTEGER now {};
     QueryPerformanceCounter(&now);
@@ -261,7 +261,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 if (LOWORD(wParam) == kModeVisibleId) g_mode = ProbeMode::Visible;
                 else if (LOWORD(wParam) == kModeHiddenId) g_mode = ProbeMode::Hidden;
                 else if (LOWORD(wParam) == kModeWarpId) g_mode = ProbeMode::Warp;
-                else break;
+                else return 0;
                 LogF("%10.3f MODE %s\n", Elapsed(), ModeKey(g_mode));
                 InvalidateRect(hwnd, nullptr, TRUE);
             }

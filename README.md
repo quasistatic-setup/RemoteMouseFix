@@ -48,7 +48,8 @@ in a folder of its own:
   README.md  LICENSE
   config/                 the three profiles
   docs/                   diagnostic reference
-  logs/                   created on the first start
+  logs/                   created by Start-Playing.cmd
+  logs-ab/                created by Start-AB-Test.cmd
 ```
 
 ### Windows warnings on first start
@@ -163,8 +164,13 @@ can still add latency.
 
 ## Report a problem or test another setup
 
-The A/B profile records detailed mouse movement for comparison. It never records keyboard
-input or text, and it has no upload or network feature. You decide whether to share a log.
+The A/B profile records detailed mouse movement and opt-in 250 ms timing summaries
+(`## TIMING`) to distinguish missing remote input, irregular timers and
+unsent movement gated by the cursor anchor. Test logs are written to `logs-ab/`
+separately from normal-play `logs/`; up to 50 files are retained, but the
+oldest still rotate out. Copy important captures into an archive outside the
+rotating folders. The tool never records keyboard input or text, and it has no
+upload or network feature. You decide whether to share a log.
 
 1. Start the game and move to a quiet, safe location.
 2. Double-click `Start-AB-Test.cmd` from the RemoteMouseFix folder.
@@ -179,7 +185,7 @@ input or text, and it has no upload or network feature. You decide whether to sh
    - hold the left mouse button and drag slowly.
 6. Note for each mode whether the camera is smooth, jumps, or moves too fast or too slowly.
 7. Press `Ctrl+Alt+C`, then `Ctrl+Alt+Q`.
-8. Open the newest file in `logs` and check that its final lines report `queue drops 0`
+8. Open the newest file in `logs-ab` and check that its final lines report `queue drops 0`
    and `watchdog trips 0`.
 9. ZIP that log and attach it to a
    [GitHub issue](https://github.com/quasistatic-setup/RemoteMouseFix/issues/new) together
@@ -288,6 +294,7 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 | `watchdog_max_unechoed` | `50` | own events allowed outstanding before the echo watchdog trips |
 | `watchdog_max_output_failures` | `5` | consecutive failed output calls before the watchdog trips |
 | `log_mouse_moves` | `true` | `false` records buttons, wheel and state only |
+| `trace_correction_timing` | `false` | opt-in 250 ms timer/anchor/pending-delta summaries; enabled in A/B profile |
 | `log_directory` | `logs` | relative paths resolve beside the EXE |
 | `log_file_prefix` | `remotemousefix` | log filename prefix |
 | `max_log_bytes` | `8388608` | rotate after this size |
@@ -300,8 +307,9 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 | `console_status_interval_ms` | `2000` | live console interval; `0` disables it |
 | `heartbeat_interval_ms` | `10000` | log heartbeat interval; `0` disables it |
 
-Log files rotate by prefix. Copy a log you want to retain out of `logs` before taking many
-further captures.
+Log files rotate by prefix. The A/B profile uses `logs-ab/` (50 files maximum) and
+normal playing uses `logs/` (5 files maximum). Copy any log you wish to preserve
+into another folder before taking more captures.
 
 ## Build from source
 

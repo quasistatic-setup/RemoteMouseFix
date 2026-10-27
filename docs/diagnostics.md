@@ -229,3 +229,13 @@ low-level input timing with RemoteMouseFix, configure a separate copy of the
 A/B profile with `target_process=MouseLookProbe.exe` and an isolated log
 folder. This test compares cursor behavior; it does not establish that the
 probe matches every detail of WoW's mouse input.
+
+### Capturing another target application
+
+Double-click `Start-AB-Test.cmd` and enter the executable filename (e.g.
+`MouseLookProbe.exe`) at the startup prompt, or press Enter for `Wow.exe`.
+This overrides the configured target for this session; no executable is started
+automatically and no JSON file is rewritten. To bypass the prompt in scripts,
+invoke `Start-AB-Test.cmd --target-process MouseLookProbe.exe`.
+The A/B panel shows the selected `TARGET`. The original foreground, hidden-cursor,
+injected-move-only and emergency-hotkey safety conditions still apply.

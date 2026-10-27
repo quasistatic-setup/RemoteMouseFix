@@ -277,8 +277,13 @@ int main() {
         const DWORD len = GetPrivateProfileStringW(
             L"Target", L"Executable", L"", selected, 260, iniPath.c_str());
         const std::wstring target(selected, static_cast<std::size_t>(len));
+        const bool invalidCharacters = std::any_of(target.begin(), target.end(), [](wchar_t ch) {
+            return ch < 32 || ch == L'<' || ch == L'>' || ch == L':' ||
+                   ch == L'"' || ch == L'/' || ch == L'\\' || ch == L'|' ||
+                   ch == L'?' || ch == L'*';
+        });
         const bool valid = target.size() >= 5 && target.size() <= 255 &&
-                           target.find_first_of(L"<>:\\"/\\\\|?*\\r\\n\\t") == std::wstring::npos &&
+                           !invalidCharacters &&
                            target.front() != L' ' && target.back() != L' ' &&
                            CompareStringOrdinal(target.c_str() + target.size() - 4, 4,
                                                 L".exe", 4, TRUE) == CSTR_EQUAL;

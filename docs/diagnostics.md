@@ -210,3 +210,22 @@ delta. `own seen` should track `applied` closely in both correction modes.
   mode the `OWN` position must equal `target`. In `relative` mode the `OWN` move's offset
   from the anchor (`anc=`) shows what pointer speed and acceleration made of `rd`;
   comparing the two measures the acceleration distortion directly.
+
+## MouseLookProbe three-mode comparison
+
+Select a radio button in `MouseLookProbe.exe` before holding the mouse button:
+A = visible cursor with no `SetCursorPos`, B = hidden cursor without
+`SetCursorPos`, C = hidden cursor with repeated `SetCursorPos` to an
+off-centre anchor. C remains the old/default behavior.
+
+Perform comparable short drags over TeamViewer and release between modes.
+In A/B the pointer can reach the screen edge. The probe records the
+`mode=visible|hidden|warp` in each `LOOK-START` and `PHASE` line, plus a
+`MODE` line on every selection change. Idle samples alone do not prove that
+the operator continued moving their mouse.
+
+First run the probe without RemoteMouseFix correcting it. If later capturing
+low-level input timing with RemoteMouseFix, configure a separate copy of the
+A/B profile with `target_process=MouseLookProbe.exe` and an isolated log
+folder. This test compares cursor behavior; it does not establish that the
+probe matches every detail of WoW's mouse input.

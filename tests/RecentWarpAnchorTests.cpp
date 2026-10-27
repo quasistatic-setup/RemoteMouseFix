@@ -49,6 +49,53 @@ void TestStaleHistoryExpires() {
     Check(!tracker.Stable(anchor, hits, total));
 }
 
+void TestOwnCorrectionTargetNeverBecomesAnchor() {
+    rmf::RecentWarpAnchor tracker;
+    POINT candidate {};
+    unsigned hits = 0, total = 0;
+    const POINT ownTarget = At(922, 568); // 20 px from the real warp (942,568)
+    for (std::uint64_t t = 1000; t < 1600; t += 10) {
+        Check(!tracker.Observe(ownTarget, 1, ownTarget, t, 900));
+    }
+    Check(!tracker.Stable(candidate, hits, total));
+}
+
+void TestRecentOutputQuarantinesSamples() {
+    rmf::RecentWarpAnchor tracker;
+    POINT candidate {};
+    unsigned hits = 0, total = 0;
+    const POINT gameWarp = At(847, 573);
+    const POINT ownTarget = At(922, 568);
+    // Even a perfectly stable candidate is rejected while outputs continue.
+    for (std::uint64_t t = 1000; t < 1150; t += 10) {
+        Check(!tracker.Observe(gameWarp, 5, ownTarget, t, 1000));
+    }
+    Check(!tracker.Stable(candidate, hits, total));
+    // Once the output is quiet, the *different* true recenter may be learned.
+    for (std::uint64_t t = 1170; t < 1290; t += 10) {
+        Check(tracker.Observe(gameWarp, 5, ownTarget, t, 1000));
+    }
+    Check(tracker.Stable(candidate, hits, total));
+    Check(candidate.x == 847 && candidate.y == 573);
+}
+
+void TestOutputWhileCollectingClearsOldConsensus() {
+    rmf::RecentWarpAnchor tracker;
+    POINT candidate {};
+    unsigned hits = 0, total = 0;
+    const POINT gameWarp = At(847, 573);
+    const POINT ownTarget = At(922, 568);
+    for (std::uint64_t t = 1200; t < 1270; t += 10)
+        tracker.Observe(gameWarp, 2, ownTarget, t, 1000);
+    Check(!tracker.Stable(candidate, hits, total));
+    Check(!tracker.Observe(ownTarget, 3, ownTarget, 1270, 1270));
+    Check(!tracker.Stable(candidate, hits, total));
+    for (std::uint64_t t = 1440; t < 1560; t += 10)
+        tracker.Observe(gameWarp, 3, ownTarget, t, 1270);
+    Check(tracker.Stable(candidate, hits, total));
+    Check(candidate.x == 847);
+}
+
 } // namespace
 
 int main() {
@@ -56,5 +103,8 @@ int main() {
     TestStableGameWarp();
     TestScatteredRemoteSamplesRejected();
     TestStaleHistoryExpires();
+    TestOwnCorrectionTargetNeverBecomesAnchor();
+    TestRecentOutputQuarantinesSamples();
+    TestOutputWhileCollectingClearsOldConsensus();
     return 0;
 }

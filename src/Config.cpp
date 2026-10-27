@@ -242,7 +242,10 @@ bool LoadConfig(const std::wstring& path, Config& cfg) {
         std::uint64_t u = 0;
         int           i = 0;
 
-        if (key == L"target_process") {
+        if (key == L"target_ini_section") {
+            if (value == L"AB-Test" || value == L"Playing") cfg.targetIniSection = value;
+            else cfg.warnings.push_back(L"invalid target_ini_section (expected AB-Test or Playing): " + value);
+        } else if (key == L"target_process") {
             if (value.empty()) {
                 cfg.warnings.push_back(L"target_process is empty, keeping " + cfg.targetProcess);
             } else {

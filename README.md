@@ -98,25 +98,31 @@ names the one thing to do next.
 Set `NO_COLOR=1` for a monochrome panel. When the output is redirected to a file, the
 panel is printed once per change instead of being repainted.
 
-For the A/B test, edit `AB-Test.ini` beside `RemoteMouseFix.exe` before
-starting `Start-AB-Test.cmd`:
+Both launchers read their own section of `RemoteMouseFix.ini` next to
+`RemoteMouseFix.exe`:
 
 ```ini
-[Target]
-Executable=Wow.exe
+[AB-Test]
+Executable=MouseLookProbe.exe
+
+[Playing]
+Executable=C:\Games\World of Warcraft\Wow.exe
 ```
 
-To test another application, replace only `Wow.exe` with its filename, e.g.
-`MouseLookProbe.exe`, save the file, then run the launcher normally. No
-startup question is shown. The value persists between runs; there is no need
-to edit the JSON profile. Only an executable **filename** ending in `.exe`
-is accepted, never a path. If the INI is missing or invalid, the A/B launcher
-stops with a clear error before starting correction.
+Use `Executable=Wow.exe` to match any running game process with that filename,
+**regardless of its installation directory**. Alternatively supply a full
+absolute Windows path to match **only that exact executable installation**.
+Spaces in the path are supported; do not surround the value with quotes.
+Change the INI while the tool is stopped, save, and start the desired
+`Start-AB-Test.cmd` or `Start-Playing.cmd` launcher as usual. No startup
+question or JSON edit is needed. The shipped file uses `Wow.exe` for both
+sections, and the settings persist across sessions.
 
-This INI affects the A/B profile only. The normal playing and diagnostic
-profiles continue using their JSON `target_process`. The selected executable
-is displayed as `TARGET` in A/B mode and the existing foreground and
-hidden-cursor safety rules still apply.
+RemoteMouseFix **does not launch a game**. The path selects the process to
+monitor and correct when the game is already running and in the foreground.
+The selected target is shown as `TARGET` in A/B mode (or `GAME` in the
+regular playing display). A missing INI or invalid target fails closed
+before correction starts. The diagnostic-only profile remains unchanged.
 
 The A/B profile additionally shows the number of markers written so far and all
 test hotkeys. Each press of `Ctrl+Alt+M` creates the next numbered `## MARKER #N`
@@ -162,7 +168,7 @@ input or text, and it has no upload or network feature. You decide whether to sh
 1. Start the game and move to a quiet, safe location.
 2. Double-click `Start-AB-Test.cmd` from the RemoteMouseFix folder.
 3. Confirm that the console names `config-ab-test.json`, that `TARGET` shows
-   the executable from `AB-Test.ini`, and that `FIX` is on with `absolute`.
+   the executable from `[AB-Test]` in `RemoteMouseFix.ini`, and that `FIX` is on with `absolute`.
    `TARGET` turns green when you click into the chosen application.
 4. Test the same actions in each mode: `absolute`, `off`, then `relative`.
    Use `Ctrl+Alt+1`, `Ctrl+Alt+C` and `Ctrl+Alt+2` to select the modes.
@@ -273,7 +279,8 @@ Keys beginning with `_` in the supplied configuration files are explanatory comm
 
 | Key | Built-in default | Meaning |
 | --- | --- | --- |
-| `target_process` | `Wow.exe` | target executable name; the A/B profile takes its target from `AB-Test.ini` instead |
+| `target_process` | `Wow.exe` | fallback target name; the A/B and Playing profiles select their executable from `RemoteMouseFix.ini` |
+| `target_ini_section` | empty | `AB-Test` or `Playing` enables that named section in `RemoteMouseFix.ini` for a name or full-path match |
 | `diagnostic_mode` | `true` | `true` prevents all correction; `false` permits correction modes |
 | `correction_mode` | `off` | startup mode: `off`, `absolute` or `relative` |
 | `watchdog_max_hidden_ms` | `180000` | hidden cursor duration before correction is disabled; `0` disables this check |

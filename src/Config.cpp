@@ -254,6 +254,9 @@ bool LoadConfig(const std::wstring& path, Config& cfg) {
         } else if (key == L"log_mouse_moves") {
             if (ParseBool(value, b)) cfg.logMouseMoves = b;
             else cfg.warnings.push_back(L"log_mouse_moves is not a boolean: " + value);
+        } else if (key == L"show_ab_test_ui") {
+            if (ParseBool(value, b)) cfg.showAbTestUi = b;
+            else cfg.warnings.push_back(L"show_ab_test_ui is not a boolean: " + value);
         } else if (key == L"log_directory") {
             cfg.logDirectory = value;
         } else if (key == L"log_file_prefix") {

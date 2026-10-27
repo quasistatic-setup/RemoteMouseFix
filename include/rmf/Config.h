@@ -18,6 +18,8 @@ struct Config {
     bool         diagnosticMode = true;
     bool         logMouseMoves  = true;       // false logs buttons/wheel/state only
     bool         showAbTestUi   = false;      // only affects the status panel; no input changes
+    std::wstring targetIniSection;            // AB-Test or Playing; empty = use JSON target
+    std::wstring targetPath;                  // optional exact image path (not just basename)
 
     // --- correction (only effective with diagnostic_mode = false) ---
     CorrectionMode correctionMode          = CorrectionMode::Off; // mode at startup

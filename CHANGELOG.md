@@ -13,7 +13,10 @@ correction is still experimental.
   WM_TIMER smoothing cadence. A worker coalesces notifications; SendInput remains
   exclusively on the original message-loop thread. Falls back to WM_TIMER when
   unavailable; a runtime timer/post failure stops correction safely.
-- Normal Playing retains WM_TIMER by default until Windows/TeamViewer testing.
+- After A/B test measurements (~16.2 ms vs ~26.7 ms per tick), normal Playing
+  now enables the high-resolution timer by default, while remaining switchable
+  back to WM_TIMER through `high_res_smoothing_timer=false`. Playing runtime
+  smoke test is required before merging.
 
 ### Fixed
 

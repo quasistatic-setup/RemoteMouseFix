@@ -539,6 +539,12 @@ int main() {
     // Relearning changes the reference for outstanding smoothing steps: main thread
     // discards the stale backlog before emitting another corrected move.
     std::atomic<std::uint32_t> anchorRevision {0};
+    // Published only after successful absolute SendInput. Used solely by the
+    // sampler to exclude our own cursor destinations from warp-anchor learning.
+    std::atomic<long> lastOwnTargetX {0};
+    std::atomic<long> lastOwnTargetY {0};
+    std::atomic<std::uint64_t> lastOwnOutputMs {0};
+    std::uint64_t ownCountAtHoldStart = 0; // sampler-thread only
     bool          haveLastShownCursor = false;
     POINT         lastShownCursor {0, 0};
     bool          sawWarpAtHoldStart = false;
@@ -606,12 +612,18 @@ int main() {
                 // insufficient (Probe mode B can keep the cursor perfectly still).
                 if (!holdPhaseOpen) {
                     recentAnchor.Reset();
+                    ownCountAtHoldStart = correction.applied.load(std::memory_order_acquire);
                     sawWarpAtHoldStart = haveLastShownCursor &&
                         (std::labs(now.cursorPos.x - lastShownCursor.x) >= 30 ||
                          std::labs(now.cursorPos.y - lastShownCursor.y) >= 30);
                 }
-                recentAnchor.Add(now.cursorPos);
                 const ULONGLONG tick = GetTickCount64();
+                const auto ownCount = correction.applied.load(std::memory_order_acquire);
+                const POINT lastOwnTarget {
+                    lastOwnTargetX.load(std::memory_order_relaxed),
+                    lastOwnTargetY.load(std::memory_order_relaxed)};
+                recentAnchor.Observe(now.cursorPos, ownCount, lastOwnTarget, tick,
+                                     lastOwnOutputMs.load(std::memory_order_acquire));
                 const std::uint32_t generation = correction.generation.load();
                 if (!holdPhaseOpen || generation != hiddenGeneration) {
                     // The watchdog clock starts with the hold, or with the latest mode
@@ -681,7 +693,17 @@ int main() {
 
             POINT anchor {};
             unsigned hits = 0, total = 0;
-            if (!anchorLearner.Finish(anchor, hits, total)) {
+            if (!anchorLearner.Finish(anchor, hits, total)) return;
+
+            // Whole-hold estimates include our own SendInput positions. When output
+            // happened in this hold, they MUST NOT overwrite a learned game anchor
+            // on button release. Mid-hold re-learning uses the stricter, own-filtered
+            // recent consensus instead.
+            if (filter.anchorValid.load(std::memory_order_acquire) &&
+                correction.applied.load(std::memory_order_acquire) != ownCountAtHoldStart) {
+                if (cfg.logStateChanges) {
+                    LogLine(L"## STATE anchor-release-estimate ignored: own output during hold");
+                }
                 return;
             }
             publishAnchor(anchor, hits, total, holdPhaseClient);
@@ -1016,7 +1038,12 @@ int main() {
         }
 
         if (ok) {
-            correction.applied.fetch_add(1, std::memory_order_relaxed);
+            if (mode == rmf::CorrectionMode::Absolute) {
+                lastOwnTargetX.store(target.x, std::memory_order_relaxed);
+                lastOwnTargetY.store(target.y, std::memory_order_relaxed);
+                lastOwnOutputMs.store(GetTickCount64(), std::memory_order_release);
+            }
+            correction.applied.fetch_add(1, std::memory_order_release);
             consecutiveOutputFailures = 0;
             const std::int64_t pending = correction.pendingEcho.fetch_add(1) + 1;
             if (pending > static_cast<std::int64_t>(cfg.watchdogMaxUnechoed)) {

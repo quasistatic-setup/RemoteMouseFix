@@ -302,3 +302,30 @@ to 50 files of 8 MiB in `logs-ab/` and still deletes the oldest matching files.
 Before repeating tests, copy important captures into a separate folder that does not
 contain the `remotemousefix-*.log` rotation target. Preserve the raw timestamps, and
 do not commit session logs to Git.
+
+## Anchor-recovery experiment (follow-up PR)
+
+When an existing anchor is wrong after the game window moves or changes its
+recenter position, the old implementation continues suppressing input and cannot
+emit a camera step until the hold ends. The guarded recovery path looks for
+**both** a cursor jump of at least 30 px when the game hides the cursor and a
+stable location in recent (up to 12) state samples: at least eight identical
+screen positions and at least 75% agreement. This reduces the risk of learning
+a random remote mouse location; a stable cursor position alone is not proof of
+recentring. If there is insufficient evidence, output still stays blocked
+rather than guessing.
+
+A successful recovery logs `## STATE anchor-relearned during hold` followed by
+`anchor-learned`. Any remaining smoothing movement queued for the previous
+anchor is dropped on the main message-loop thread with
+`## SMOOTH RESET reason=anchor-relearned` to prevent a large delayed jump.
+No output is sent from the state sampler and the hook's safety gates are
+unchanged.
+
+Windows regression: with TeamViewer and the A/B profile targeting Wow.exe,
+rotate the camera, move the WoW window while the cursor is visible, then drag
+again with the fix ON. An incorrect anchor must recover inside the new hold,
+without a multi-second `off_anchor` run or a burst of old queued motion.
+Repeat without moving the window. Probe A/B/C, relative and OFF modes,
+hotkey emergency-off and loss of focus must still behave correctly.
+**MSVC/CTest alone does not establish runtime safety or mouse-look quality.**

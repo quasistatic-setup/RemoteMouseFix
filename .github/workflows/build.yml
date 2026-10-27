@@ -11,7 +11,7 @@ jobs:
     name: MSVC x64
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure
         # No -G: CMake picks the newest Visual Studio on the runner image.
@@ -25,7 +25,7 @@ jobs:
         run: cmake --install build --config Release --prefix stage/RemoteMouseFix-win-x64
 
       - name: Upload the build output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: RemoteMouseFix-win-x64
           path: stage/RemoteMouseFix-win-x64

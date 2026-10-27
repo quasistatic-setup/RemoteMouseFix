@@ -12,9 +12,11 @@ correction is still experimental.
 - MouseLookProbe now provides visible/no-warp, hidden/no-warp and hidden/warp
   modes to distinguish cursor hiding from cursor repositioning. The original
   hidden/warp mode remains the default for automated regression testing.
-- The A/B launcher reads the target executable filename from editable
-  `AB-Test.ini` beside the EXE (default `Wow.exe`), without prompting at
-  startup or modifying other profiles. Invalid INI values fail safely.
+- Both `Start-AB-Test.cmd` and `Start-Playing.cmd` read independent
+  targets from `[AB-Test]` and `[Playing]` in `RemoteMouseFix.ini`.
+  Select by executable filename or a full absolute path (exact process-image
+  match). Missing or invalid INI settings fail safely before correction.
+  The tool does not launch the configured game.
 - The A/B console displays Ctrl+Alt+M, the number of markers written and all
   correction/diagnostic hotkeys.
 - The CI diagnostic artifact includes MouseLookProbe.exe for direct tests.

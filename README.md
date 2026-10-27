@@ -112,7 +112,8 @@ Executable=C:\Games\World of Warcraft\Wow.exe
 Use `Executable=Wow.exe` to match any running game process with that filename,
 **regardless of its installation directory**. Alternatively supply a full
 absolute Windows path to match **only that exact executable installation**.
-Spaces in the path are supported; do not surround the value with quotes.
+Spaces in the path are supported. Enclosing the whole value in double quotes is optional;
+Windows removes them when reading the INI. Your runtime test confirmed both forms.
 Change the INI while the tool is stopped, save, and start the desired
 `Start-AB-Test.cmd` or `Start-Playing.cmd` launcher as usual. No startup
 question or JSON edit is needed. The shipped file uses `Wow.exe` for both
